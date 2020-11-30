@@ -391,6 +391,18 @@ def main():
     tsla_close = tsla_close.dropna()
     logger.debug(tsla_close)
 
+    # plot the graph describe tsla close
+    if args.plot:
+        fig = plt.gcf()
+        fig.set_size_inches(18.5, 10.5)
+        plt.plot(tsla_close, label = "Series")
+        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).mean(), '--', 
+                 label = "Rolling mean")
+        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).std(), ":",
+                 label = "Rolling Std")
+        plt.legend(loc = "best")
+        plt.savefig("tesla_description.png")
+
     # if log transformation
     if args.log:
         tsla_close = tsla_close.apply(np.log) # log transformation

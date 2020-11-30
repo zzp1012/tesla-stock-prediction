@@ -11,6 +11,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # statistics tools
+from arch import arch_model # import arch_model.
+# check white noise. If p-value smaller than 0.05, then we are confident that the time series are not while noise.
+from statsmodels.stats.diagnostic import acorr_ljungbox
 from pandas_datareader import data as wb # datareader supports multiple financial database including yahoo and google
 from dateutil.relativedelta import relativedelta
 import statsmodels.api as sm
@@ -34,7 +37,7 @@ logging.basicConfig(
                     format='%(name)s %(levelname)s %(message)s',
                     datefmt = "%H:%M:%S",
                     level=logging.ERROR)
-logger = logging.getLogger("ARIMA")
+logger = logging.getLogger("GARCH")
 
 
 def loss(y_pred, y_truth, loss_func):
@@ -54,13 +57,16 @@ def loss(y_pred, y_truth, loss_func):
         return np.sqrt(mean_squared_error(y_truth, y_pred))
 
 
-def model_predict(trend_model_fit, residual_model_fit, 
+def model_predict(trend_arima_fit, residual_arima_fit, 
+                  trend_garch_fit, residual_garch_fit,
                   trend, residual, seasonal, 
                   trend_diff_counts, residual_diff_counts, 
                   if_pred, start, end, period):
     """
-    trend_model_fit: ARIMA model after fit the trend.
-    residual_model_fit: ARIMA model after fit the residual.
+    trend_arima_fit: ARIMA model after fit the trend.
+    residual_arima_fit: ARIMA model after fit the residual.
+    trend_garch_fit: GARCH model after fit the trend_arima_fit.resid.
+    residual_garch_fit: GARCH model after fit the residual_arima_fit.resid.
     trend: time series of trend.
     residual: time series of residual.
     seasonal: time series of seasonal.
@@ -76,13 +82,13 @@ def model_predict(trend_model_fit, residual_model_fit,
         # get the first date after the last date in train.
         date_after_train = str(trend.index.tolist()[-1] + relativedelta(days=1))
         # get the trend predicted sequence from the start of start to end
-        trend_pred_seq = np.array(trend_model_fit.predict(start = date_after_train, 
+        trend_pred_seq = np.array(trend_arima_fit.predict(start = date_after_train, 
                                                           end = end,
                                                           dynamic = True)) # The dynamic keyword affects in-sample prediction. 
         trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
                                                   trend_pred_seq)))
         # get the residual predicted sequence from the start of start to end
-        residual_pred_seq = np.array(residual_model_fit.predict(start = date_after_train,
+        residual_pred_seq = np.array(residual_arima_fit.predict(start = date_after_train,
                                                                 end = end,
                                                                 dynamic = True))
         residual_pred_seq = np.array(np.concatenate((np.array(residual.diff(residual_diff_counts).fillna(0)),
@@ -92,8 +98,8 @@ def model_predict(trend_model_fit, residual_model_fit,
         seasonal_pred_seq = list(seasonal[len(seasonal) - period:]) * (round((pred_period) / period) + 1) 
         seasonal_pred_seq = np.array(seasonal_pred_seq[0:pred_period])
     else:
-        trend_pred_seq = np.array(trend_model_fit.fittedvalues)
-        residual_pred_seq = np.array(residual_model_fit.fittedvalues)
+        trend_pred_seq = np.array(trend_arima_fit.fittedvalues)
+        residual_pred_seq = np.array(residual_arima_fit.fittedvalues)
         seasonal_pred_seq = np.array(seasonal)
     
     while trend_diff_counts > 0 or residual_diff_counts > 0:
@@ -117,6 +123,52 @@ def model_predict(trend_model_fit, residual_model_fit,
         return trend_pred_seq + residual_pred_seq + seasonal_pred_seq
 
 
+def GARCH_model(resid, args, name):
+    """
+    resid: stationary residual time_series after ARIMA. 
+    args: arguments parsed before.
+    name: the name of time_series_diff.
+    return fitted GARCH model, parameters for GARCH model.
+    """
+    if args.plot:
+        # plot acf and pacf for stationary time series
+        # if we can find some autocorrelations from the graph, then we should use GARCH.
+        fig, axes = plt.subplots(2, 1, figsize = (8,6), dpi = 100)
+        plot_acf(resid.tolist(), lags = 50, ax = axes[0])
+        plot_pacf(resid.tolist(), lags = 50, ax = axes[1])
+        plt.savefig("GARCH_" + name + "_acf_pacf.png")
+        plt.close()
+
+    best_criteria = np.inf 
+    best_model_order = (0, 0)
+    best_model = None
+    for p in range(args.max_p):
+        for q in range(args.max_q):
+            try:
+                model = arch.arch_model(resid,
+                                        mean = 'Zero',
+                                        p = p, 
+                                        q = q, 
+                                        vol = 'GARCH')
+                model_fit = model.fit(disp = "off",
+                                      update_freq = 0,
+                                      tol = args.tol,
+                                      show_warning = False)
+
+                if args.ic == "aic":
+                    current_criteria = model_fit.aic
+                else:
+                    current_criteria = model_fit.bic
+                
+                if current_criteria <= best_criteria:
+                    best_criteria, best_model_order, best_model = np.round(current_criteria, 0), (p, q), model_fit
+            except:
+                logger.warning("Error occurs, try another combination of p and q.")
+                pass
+
+    return best_model, best_model_order
+
+
 def ARIMA_model(time_series_diff, args, name):
     """
     time_series_diff: stationary time_series after diff. 
@@ -124,12 +176,52 @@ def ARIMA_model(time_series_diff, args, name):
     name: the name of time_series_diff.
     return fitted ARIMA model, parameters for ARIMA model.
     """
-    fig, axes = plt.subplots(1,2, figsize=(16,3), dpi= 100)
-    plot_acf(time_series_diff.tolist(), lags=50, ax=axes[0])
-    plot_pacf(time_series_diff.tolist(), lags=50, ax=axes[1])
-    plt.savefig(name + "_acf_pacf.png")
-    plt.close()
+    if args.plot:
+        # plot acf and pacf for stationary time series
+        fig, axes = plt.subplots(2, 1, figsize = (8,6), dpi = 100)
+        plot_acf(time_series_diff.tolist(), lags = 50, ax = axes[0])
+        plot_pacf(time_series_diff.tolist(), lags = 50, ax = axes[1])
+        plt.savefig("ARIMA_" + name + "_acf_pacf.png")
+        plt.close()
 
+    # find the optimal order of ARIMA model.
+    evaluate = sm.tsa.arma_order_select_ic(time_series_diff,
+                                           ic = args.ic,
+                                           trend = "c",
+                                           max_ar = args.max_ar,
+                                           max_ma = args.max_ma)
+    min_order = evaluate[args.ic + "_min_order"] # get the parameter for ARIMA model.
+
+    # initial the success_flag to false
+    success_flag = False
+    while not success_flag:
+        # construct the ARIMA model.
+        model = ARIMA(time_series_diff, order=(min_order[0], 0, min_order[1])) # d is the order of diff, which we have done that perviously.
+        # keep finding initial parameters until convergence.
+        try:
+            model_fit = model.fit(disp = False, 
+                                  start_params = np.random.rand(min_order[0] + min_order[1] + 1),
+                                  method = args.method,
+                                  trend = "c", # Some posts' experimentation suggests that ARIMA models may be less likely to converge with the trend term disabled, especially when using more than zero MA terms.
+                                  transparams = True,
+                                  solver = "lbfgs", # we turn to use this one, which gives the best RMSE & executation time.
+                                  tol = args.tol, # The convergence tolerance. Default is 1e-08.
+                                  )
+            success_flag = True
+        except:
+            logger.warning("Error occurs, try another starting parameters.")
+            pass
+
+    return model_fit, min_order
+
+
+def mix_model(time_series_diff, args, name):
+    """
+    time_series_diff: stationary time_series after diff. 
+    args: arguments parsed before.
+    name: the name of time_series_diff.
+    return fitted ARIMA model, parameters for ARIMA model, fitted GARCH model and parameters for GARCH model.
+    """
     # check if args.ic is illegal.
     if args.ic not in ["bic", "aic"]:
         logger.warning("The information criteria is illegal. Turn to default ic: BIC")
@@ -145,35 +237,34 @@ def ARIMA_model(time_series_diff, args, name):
         logger.warning("The likelihood function is illegal. Turn to default choice: css-mle")
         args.method = "css-mle"
 
-    evaluate = sm.tsa.arma_order_select_ic(time_series_diff,
-                                           ic = args.ic,
-                                           trend = "c",
-                                           max_ar = args.max_ar,
-                                           max_ma = args.max_ma)
-    # get the parameter for ARIMA model.
-    min_order = evaluate[args.ic + "_min_order"]
+    # get arima model
+    arima_model_fit, arima_order = ARIMA_model(time_series_diff, args, name)
 
-    # initial the success_flag to false
-    success_flag = False
-    while not success_flag:
-        # construct the ARIMA model.
-        model = ARIMA(time_series_diff, order=(min_order[0], 0, min_order[1])) # d is the order of diff, which we have done that perviously.
-        # keep finding initial parameters until convergence.
-        try:
-            model_fit = model.fit(disp = False, 
-                                start_params = np.random.rand(min_order[0] + min_order[1] + 1),
-                                method = args.method,
-                                trend = "c", # Some posts' experimentation suggests that ARIMA models may be less likely to converge with the trend term disabled, especially when using more than zero MA terms.
-                                transparams = True,
-                                solver = "lbfgs", # we turn to use this one, which gives the best RMSE & executation time.
-                                tol = args.tol, # The convergence tolerance. Default is 1e-08.
-                                )
-            success_flag = True
-        except:
-            logger.warning("Error occurs, try another starting parameters.")
-            pass
+    if args.plot:
+        # residual plots of residual model
+        arima_model_fit.resid.plot()
+        plt.savefig(name + "_resid_plt.png")
+        plt.close()
+        arima_model_fit.resid.plot(kind='kde')
+        plt.savefig(name + "_kde_resid_plt.png")
+        plt.close()
 
-    return model_fit, min_order
+    # check if the resid of arima model is white noise
+    _, pvalue = acorr_ljungbox(arima_model_fit.resid,
+                               model_df=sum(arima_order),
+                               return_df=False, 
+                               auto_lag=True)
+    logger.info("acorr_ljungbox: " + str(list(pvalue)))
+    if np.sum(pvalue < 0.05) > 0:
+        logger.info("residual after fit still can not give white noises, we turn to use GARCH")
+    else:
+        logger.info("Although the residual does give good random values, we still turn to GARCH")
+    
+    # get garch model
+    garch_model_fit, garch_order = GARCH_model(arima_model_fit.resid, args, name)
+
+    return arima_model_fit, arima_order \
+           garch_model_fit, garch_order
 
 
 def diff(time_series, if_plot, name):
@@ -304,14 +395,14 @@ def add_args():
     """
     return a parser added with args required by fit
     """
-    parser = argparse.ArgumentParser(description="TSLA-ARIMA")
+    parser = argparse.ArgumentParser(description="TSLA-ARIMA-GARCH")
 
     # hyperparameters setting
     parser.add_argument('--month', type=int, default=3,
                         help='The data ranges from several months ago to now. Default 4. Suggest that not too long period to avoid outliers in data.')
 
-    parser.add_argument('--period', type=int, default=5,
-                        help='The seasonal period. Default 5.')
+    parser.add_argument('--period', type=int, default=7,
+                        help='The seasonal period. Default 7.')
 
     parser.add_argument('--split_ratio', type=float, default=0.7,
                         help='Data splitting ratio. Default 0.7.')
@@ -339,6 +430,12 @@ def add_args():
     
     parser.add_argument("-l", "--log", action="store_true", dest="log", 
                         help= "Enable log transformation. Default false.")
+
+    parser.add_argument('--max_p', type=int, default=4,
+                        help='Maximum lag order of the symmetric innovation. Default 4.')
+
+    parser.add_argument('--max_q', type=int, default=4,
+                        help='Maximum lag order of lagged volatility or equivalent. Default 4.')
 
     # set if using debug mod
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", 
@@ -391,6 +488,18 @@ def main():
     tsla_close = tsla_close.dropna()
     logger.debug(tsla_close)
 
+    # plot the graph describe tsla close
+    if args.plot:
+        fig = plt.gcf()
+        fig.set_size_inches(18.5, 10.5)
+        plt.plot(tsla_close, label = "Series")
+        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).mean(), '--', 
+                 label = "Rolling mean")
+        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).std(), ":",
+                 label = "Rolling Std")
+        plt.legend(loc = "best")
+        plt.savefig("tesla_description.png")
+
     # if log transformation
     if args.log:
         tsla_close = tsla_close.apply(np.log) # log transformation
@@ -413,8 +522,8 @@ def main():
     logger.info("-------------decomposition-------------")
     # check if period is legal.
     if args.period < 2:
-        logger.warning("Seasonal period is illegal. Turn to use default 5.")
-        args.period = 5
+        logger.warning("Seasonal period is illegal. Turn to use default 7.")
+        args.period = 7
     trend, seasonal, residual = decompose(train, args.period, args.plot)
 
     # difference
@@ -425,38 +534,29 @@ def main():
     logger.debug("residual diff counts: " + str(residual_diff_counts))
     
     # ARIMA model
-    logger.info("-----------ARIMA construction----------")
-    trend_model_fit, trend_model_order = ARIMA_model(trend_diff, args, "trend_diff")
-    logger.info("Trend model parameters: " + str(tuple([trend_model_order[0],
+    logger.info("-------ARIMA GARCH construction--------")
+    trend_arima_fit, trend_arima_order \ 
+    trend_garch_fit, trend_garch_order = mix_model(trend_diff, args, "trend_diff")
+    logger.info("Trend ARIMA parameters: " + str(tuple([trend_arima_order[0],
                                                         trend_diff_counts,
-                                                        trend_model_order[1]])))
-    residual_model_fit, residual_model_order = ARIMA_model(residual_diff, args, "residual_diff")
-    logger.info("Residual model parameters: " + str(tuple([residual_model_order[0],
+                                                        trend_arima_order[1]])))
+    logger.info("Trend GARCH parameters: " + str(trend_garch_order))
+    residual_arima_fit, residual_arima_order \ 
+    residual_garch_fit, residual_garch_order = mix_model(residual_diff, args, "residual_diff")
+    logger.info("Residual ARIMA parameters: " + str(tuple([residual_model_order[0],
                                                           residual_diff_counts,
-                                                          residual_model_order[1]])))
+                                                          residual_arima_order[1]])))
+    logger.info("Residual GARCH parameters: " + str(residual_garch_order))
 
     # model summary
-    logger.debug("---------trend model summary----------")
-    logger.debug(trend_model_fit.summary())
-    logger.debug("---------resid model summary----------")
-    logger.debug(residual_model_fit.summary())
-
-    if args.plot:
-        # residual plots of trend model
-        trend_model_fit.resid.plot()
-        plt.savefig("resid_plt_trend.png")
-        plt.close()
-        trend_model_fit.resid.plot(kind='kde')
-        plt.savefig("kde_resid_plt_trend.png")
-        plt.close()
-        
-        # residual plots of residual model
-        residual_model_fit.resid.plot()
-        plt.savefig("resid_plt_residual.png")
-        plt.close()
-        residual_model_fit.resid.plot(kind='kde')
-        plt.savefig("kde_resid_plt_residual.png")
-        plt.close()
+    logger.debug("---------trend ARIMA summary----------")
+    logger.debug(trend_arima_fit.summary())
+    logger.debug("---------trend GARCH summary----------")
+    logger.debug(trend_garch_fit.summary())
+    logger.debug("---------resid ARIMA summary----------")
+    logger.debug(residual_arima_fit.summary())
+    logger.debug("---------resid GARCH summary----------")
+    logger.debug(residual_garch_fit.summary())
 
     logger.debug("-----trend model residual describe----")
     logger.debug(trend_model_fit.resid.describe()) # describe the dataframe 
