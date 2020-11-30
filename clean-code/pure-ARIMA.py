@@ -403,9 +403,9 @@ def main():
         plt.close()
 
     logger.debug("-----trend model residual describe----")
-    logger.debug(trend_model_fit.resid.describe())
+    logger.debug(trend_model_fit.resid.describe()) # describe the dataframe 
     logger.debug("-----resid model residual describe----")
-    logger.debug(residual_model_fit.resid.describe())
+    logger.debug(residual_model_fit.resid.describe()) # describe the dataframe
 
     # loss calculation
     logger.info("-----------Loss calculation------------")
