@@ -18,7 +18,6 @@ from statsmodels.tsa.stattools import adfuller as ADF
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.arima_model import ARIMA
 from sklearn.metrics import mean_squared_error, r2_score
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf # plot acf and pacf.
 
 # ignore warnings
 import warnings
@@ -95,19 +94,19 @@ def model_predict(trend_model_fit, residual_model_fit,
         trend_pred_seq = np.array(trend_model_fit.fittedvalues)
         residual_pred_seq = np.array(residual_model_fit.fittedvalues)
         seasonal_pred_seq = np.array(seasonal)
+
+    if trend_diff_counts > 0:
+        trend_pred_seq = trend_pred_seq + trend[0]
+    if residual_diff_counts > 0:
+        residual_pred_seq = residual_pred_seq + residual[0]
     
     while trend_diff_counts > 0 or residual_diff_counts > 0:
         if trend_diff_counts > 0:
             trend_pred_seq.cumsum()
             trend_diff_counts -= 1
-            if trend_diff_counts == 0:
-                trend_pred_seq = trend_pred_seq + trend[0]
         if residual_diff_counts > 0:
             residual_pred_seq.cumsum()
             residual_diff_counts -= 1
-            if residual_diff_counts == 0:
-                residual_pred_seq = residual_pred_seq + residual[0]
-
     if if_pred:
         pred_period = (datetime.datetime.strptime(end, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(start, '%Y-%m-%d %H:%M:%S')).days + 1
         return trend_pred_seq[len(trend_pred_seq)-pred_period:] + \
@@ -117,19 +116,12 @@ def model_predict(trend_model_fit, residual_model_fit,
         return trend_pred_seq + residual_pred_seq + seasonal_pred_seq
 
 
-def ARIMA_model(time_series_diff, args, name):
+def ARIMA_model(time_series_diff, args):
     """
     time_series_diff: stationary time_series after diff. 
     args: arguments parsed before.
-    name: the name of time_series_diff.
     return fitted ARIMA model, parameters for ARIMA model.
     """
-    fig, axes = plt.subplots(1,2, figsize=(16,3), dpi= 100)
-    plot_acf(time_series_diff.tolist(), lags=50, ax=axes[0])
-    plot_pacf(time_series_diff.tolist(), lags=50, ax=axes[1])
-    plt.savefig(name + "_acf_pacf.png")
-    plt.close()
-
     # check if args.ic is illegal.
     if args.ic not in ["bic", "aic"]:
         logger.warning("The information criteria is illegal. Turn to default ic: BIC")
@@ -214,20 +206,11 @@ def decompose(time_series, season_period, if_plot):
     if_plot: boolen value indicating whether to plot.
     return the decomposition of the time_series including trend, seasonal, residual.
     """    
-    # find the filt for seasonal_decompose
-    if season_period % 2 == 0:  # split weights at ends
-        filt = np.array([.5] + [1] * (season_period - 1) + [.5]) / season_period
-    else:
-        filt = np.repeat(1. / season_period, season_period)
-    logger.info("seasonal_decompose filter: " + str(filt))
-
     decomposition = seasonal_decompose(time_series, 
-                                       model = 'additive', # additive model is the default choice. 
-                                                           # We tried "multiplicative" but it is totally meaningless.
-                                       two_sided = True,
-                                       filt = filt,
-                                       extrapolate_trend = 'freq',
-                                       period = season_period) 
+                                       model='additive', # additive model is the default choice. 
+                                                         # We tried "multiplicative" but it is totally meaningless.
+                                       extrapolate_trend='freq',
+                                       period=season_period) 
     trend = decomposition.trend
     seasonal = decomposition.seasonal
     residual = decomposition.resid
@@ -251,29 +234,6 @@ def decompose(time_series, season_period, if_plot):
         plt.close()
 
     return trend, seasonal, residual
-
-
-def app_entropy(U, m = 2, r = 3) -> float:
-    """
-    U: the time series.
-    m: an integer representing the length of compared run of data. Default 2.
-    r: a positive real number specifying a filtering level. Default 3.
-    return approximate entroy.
-    """
-    def _maxdist(x_i, x_j):
-        return max([abs(ua - va) for ua, va in zip(x_i, x_j)])
-
-    def _phi(m):
-        x = [[U[j] for j in range(i, i + m - 1 + 1)] for i in range(N - m + 1)]
-        C = [
-            len([1 for x_j in x if _maxdist(x_i, x_j) <= r]) / (N - m + 1.0)
-            for x_i in x
-        ]
-        return (N - m + 1.0) ** (-1) * sum(np.log(C))
-
-    N = len(U)
-
-    return abs(_phi(m + 1) - _phi(m))
 
 
 def data_loader(tickers, month):
@@ -320,8 +280,8 @@ def add_args():
     parser.add_argument('--max_ar', type=int, default=4,
                         help='Maximum number of AR lags to use. Default 4.')
 
-    parser.add_argument('--max_ma', type=int, default=4,
-                        help='Maximum number of MA lags to use. Default 4.')
+    parser.add_argument('--max_ma', type=int, default=2,
+                        help='Maximum number of MA lags to use. Default 2.')
 
     parser.add_argument('--ic', type=str, default="bic",
                         help='Information criteria to report. Either a single string or a list of different criteria is possible. Default BIC.')
@@ -337,16 +297,13 @@ def add_args():
 
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed. Default 0.')
-    
-    parser.add_argument("-l", "--log", action="store_true", dest="log", 
-                        help= "Enable log transformation. Default false.")
 
     # set if using debug mod
-    parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", 
+    parser.add_argument("-v", "--verbose", action= "store_true", dest= "verbose", 
                         help= "Enable debug info output. Default false.")
 
     # set if plots
-    parser.add_argument("-p", "--plot", action="store_true", dest="plot", 
+    parser.add_argument("-p", "--plot", action= "store_true", dest= "plot", 
                         help= "Enable plots. Default false.")
 
     args = parser.parse_args()
@@ -382,6 +339,7 @@ def main():
         args.month = 3
     tsla_df = data_loader(tickers, args.month)[0] # get dataframes from "yahoo" finance.
     tsla_close = tsla_df["Close"].resample('D').ffill() # fullfill the time series.
+    logger.debug(tsla_close)
 
     # data cleaning
     logger.info("-------------Data cleaning-------------")
@@ -390,16 +348,6 @@ def main():
         tsla_close = tsla_close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
     # Then, if there is still some missing values, we simply drop this value.abs
     tsla_close = tsla_close.dropna()
-    logger.debug(tsla_close)
-
-    # if log transformation
-    if args.log:
-        tsla_close = tsla_close.apply(np.log) # log transformation
-
-    # estimate the forecastability of a time series:
-    #   Approximate entropy is a technique used to quantify the amount of regularity and the unpredictability of fluctuations over time-series data. 
-    #   Smaller values indicates that the data is more regular and predictable.
-    logger.info("The approximate entropy: " + str(app_entropy(U = np.array(tsla_close), r = 0.2*np.std(np.array(tsla_close)))))
 
     # data splitting
     logger.info("-------------Data splitting------------")
@@ -427,11 +375,11 @@ def main():
     
     # ARIMA model
     logger.info("-----------ARIMA construction----------")
-    trend_model_fit, trend_model_order = ARIMA_model(trend_diff, args, "trend_diff")
+    trend_model_fit, trend_model_order = ARIMA_model(trend_diff, args)
     logger.info("Trend model parameters: " + str(tuple([trend_model_order[0],
                                                         trend_diff_counts,
                                                         trend_model_order[1]])))
-    residual_model_fit, residual_model_order = ARIMA_model(residual_diff, args, "residual_diff")
+    residual_model_fit, residual_model_order = ARIMA_model(residual_diff, args)
     logger.info("Residual model parameters: " + str(tuple([residual_model_order[0],
                                                           residual_diff_counts,
                                                           residual_model_order[1]])))
@@ -470,9 +418,6 @@ def main():
                             trend, residual, seasonal, 
                             trend_diff_counts, residual_diff_counts, 
                             False, "", "", args.period)
-    if args.log:
-        fit_seq = np.exp(fit_seq)
-        train = train.apply(np.exp)
     logger.debug(fit_seq)
 
     # calculate training loss
@@ -493,9 +438,6 @@ def main():
                                 trend, residual, seasonal, 
                                 trend_diff_counts, residual_diff_counts, 
                                 True, str(test.index.tolist()[0]), str(test.index.tolist()[-1]), args.period)
-        if args.log:
-            pred_seq = np.exp(pred_seq)
-            test = test.apply(np.exp)
         logger.debug(pred_seq) 
 
         # calculate testing loss
@@ -517,8 +459,6 @@ def main():
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
                                True, "2020-12-07 00:00:00", "2020-12-11 00:00:00", args.period)
-    if args.log:
-        prediction = np.exp(prediction)
     logger.info("2020-12-07 predicted value: " + str(prediction[0]))
     logger.info("2020-12-08 predicted value: " + str(prediction[1]))
     logger.info("2020-12-09 predicted value: " + str(prediction[2]))
