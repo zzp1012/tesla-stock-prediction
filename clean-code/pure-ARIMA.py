@@ -24,6 +24,7 @@ import warnings
 from statsmodels.tools.sm_exceptions import ConvergenceWarning, HessianInversionWarning
 warnings.simplefilter("ignore", ConvergenceWarning)
 warnings.simplefilter("ignore", HessianInversionWarning)
+warnings.simplefilter("ignore", RuntimeWarning)
 
 # set the logger
 logging.basicConfig(
@@ -164,32 +165,70 @@ def ARIMA_model(time_series_diff, args):
     return model_fit, min_order
 
 
-def diff(time_series):
+def diff(time_series, if_plot, name):
     """
     times_seris: time_series, pd.Dataframe.
+    if_plot: boolen value indicating whether to plot.
+    name: string value indicating name of the time series.
     return stationary time_series, counts of diff when the time_series become stationary.
     """
     counts = 0 # indicating how many times the series diffs.
     copy_series = copy.deepcopy(time_series)
     # keep diff until ADF test's p-value is smaller than 1%.
     while ADF(copy_series.tolist())[1] > 0.01:
+        logger.info("time " + str(counts) + "ADF test: " + str(ADF(copy_series.tolist())))
         copy_series = copy_series.diff(1)
         copy_series = copy_series.fillna(0)
         counts += 1
+    
+    logger.info("time " + str(counts) + " ADF test: " + str(ADF(copy_series.tolist())))
+
+    # plot diff and original time series in one graph.
+    if if_plot:
+        plt.figure(figsize=(10, 5))
+        plt.plot(time_series, label='Original', color='blue')
+        plt.plot(copy_series, label='Diff' + str(counts), color='red')
+        plt.legend(loc='best')
+        plt.savefig(name + "_diff.png")
+        plt.close()
+    
     return copy_series, counts
 
 
-def decompose(time_series, season_period):
+def decompose(time_series, season_period, if_plot):
     """
     times_seris: time_series, pd.Dataframe.
     season_period: period of seasonality, float.
+    if_plot: boolen value indicating whether to plot.
     return the decomposition of the time_series including trend, seasonal, residual.
     """    
     decomposition = seasonal_decompose(time_series, 
                                        model='additive', # additive model is the default choice.
                                        extrapolate_trend='freq', 
                                        period=season_period) 
-    return decomposition.trend, decomposition.seasonal, decomposition.resid
+    trend = decomposition.trend
+    seasonal = decomposition.seasonal
+    residual = decomposition.resid
+
+    # plot the time series decomposition
+    if if_plot:
+        plt.figure(figsize=(12, 7))
+        plt.subplot(411)
+        plt.plot(time_series, label='Original')
+        plt.legend(loc='best')
+        plt.subplot(412)
+        plt.plot(trend, label='Trend')
+        plt.legend(loc='best')
+        plt.subplot(413)
+        plt.plot(seasonal, label='Seasonarity')
+        plt.legend(loc='best')
+        plt.subplot(414)
+        plt.plot(residual, label='Residual')
+        plt.legend(loc='best')
+        plt.savefig("decomposition.png")
+        plt.close()
+
+    return trend, seasonal, residual
 
 
 def data_loader(tickers, month):
@@ -251,6 +290,9 @@ def add_args():
     parser.add_argument('--loss', type=str, default="rmse",
                         help='The loss function. Default rmse.')
 
+    parser.add_argument('--seed', type=int, default=0,
+                        help='Random seed. Default 0.')
+
     # set if using debug mod
     parser.add_argument("-v", "--verbose", action= "store_true", dest= "verbose", 
                         help= "Enable debug info output. Default false.")
@@ -276,6 +318,9 @@ def main():
     # show the hyperparameters
     logger.info("---------hyperparameter setting---------")
     logger.info(args)
+
+    # set the random seed
+    np.random.seed(args.seed)
 
     # data fetching
     logger.info("-------------Data fetching-------------")
@@ -314,13 +359,13 @@ def main():
     if args.period < 2:
         logger.warning("Seasonal period is illegal. Turn to use default 5.")
         args.period = 5
-    trend, seasonal, residual = decompose(train, args.period)
+    trend, seasonal, residual = decompose(train, args.period, args.plot)
 
     # difference
     logger.debug("-----------------Diff-----------------")
-    trend_diff, trend_diff_counts = diff(trend)
+    trend_diff, trend_diff_counts = diff(trend, args.plot, "trend")
     logger.debug("trend diff counts: " + str(trend_diff_counts))
-    residual_diff, residual_diff_counts = diff(residual)
+    residual_diff, residual_diff_counts = diff(residual, args.plot, "residual")
     logger.debug("residual diff counts: " + str(residual_diff_counts))
     
     # ARIMA model
@@ -340,6 +385,28 @@ def main():
     logger.debug("---------resid model summary----------")
     logger.debug(residual_model_fit.summary())
 
+    if args.plot:
+        # residual plots of trend model
+        trend_model_fit.resid.plot()
+        plt.savefig("resid_plt_trend.png")
+        plt.close()
+        trend_model_fit.resid.plot(kind='kde')
+        plt.savefig("kde_resid_plt_trend.png")
+        plt.close()
+        
+        # residual plots of residual model
+        residual_model_fit.resid.plot()
+        plt.savefig("resid_plt_residual.png")
+        plt.close()
+        residual_model_fit.resid.plot(kind='kde')
+        plt.savefig("kde_resid_plt_residual.png")
+        plt.close()
+
+    logger.debug("-----trend model residual describe----")
+    logger.debug(trend_model_fit.resid.describe())
+    logger.debug("-----resid model residual describe----")
+    logger.debug(residual_model_fit.resid.describe())
+
     # loss calculation
     logger.info("-----------Loss calculation------------")
     fit_seq = model_predict(trend_model_fit, residual_model_fit,
@@ -352,6 +419,15 @@ def main():
     training_loss = loss(fit_seq, np.array(train), args.loss)
     logger.info("Training loss: " + str(training_loss))
 
+    # plot train and fitted values in one graph.
+    if args.plot:
+        plt.figure()
+        plt.plot(fit_seq, color='red', label='fit')
+        plt.plot(np.array(train), color ='blue', label='train')
+        plt.legend(loc='best')
+        plt.savefig('fit_vs_train.png')
+        plt.close()
+
     if list(test):
         test_start = str(test.index.tolist()[0]).replace(" 00:00:00", "")
         test_end = str(test.index.tolist()[-1]).replace(" 00:00:00", "")
@@ -363,6 +439,15 @@ def main():
 
         testing_loss = loss(pred_seq, np.array(test), args.loss)
         logger.info("Testing loss: " + str(testing_loss))
+
+        # plot test and predicted value in one graph.
+        if args.plot:
+            plt.figure()
+            plt.plot(pred_seq, color = "red", label = "pred")
+            plt.plot(np.array(test), color = "blue", label = "test")
+            plt.legend(loc="best")
+            plt.savefig("pred_vs_test.png")
+            plt.close()
 
     # prediction
     logger.info("--------------prediction---------------")
