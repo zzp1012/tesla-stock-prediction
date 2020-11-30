@@ -169,10 +169,9 @@ def ARIMA_model(time_series_diff, args, name):
                                 tol = args.tol, # The convergence tolerance. Default is 1e-08.
                                 )
             success_flag = True
-        except ValueError:
-            logger.warning("ValueError occurs, choosing another starting parameters.")
-        except np.linalg.LinAlgError:
-            logger.warning("np.linalg.LinAlgError occurs, choosing another starting parameters.")
+        except:
+            logger.warning("Error occurs, try another starting parameters.")
+            pass
 
     return model_fit, min_order
 
