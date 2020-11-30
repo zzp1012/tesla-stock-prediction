@@ -23,9 +23,9 @@ from sklearn.metrics import mean_squared_error, r2_score
 logging.basicConfig(
                     # filename = "logfile",
                     # filemode = "w+",
-                    format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+                    format='%(name)s %(levelname)s %(message)s',
                     datefmt = "%H:%M:%S",
-                    level=logging.DEBUG)
+                    level=logging.INFO)
 logger = logging.getLogger("ARIMA")
 
 
@@ -46,18 +46,85 @@ def loss(y_pred, y_truth, loss_func):
         return np.sqrt(mean_squared_error(y_truth, y_pred))
 
 
-def ARIMA_model(time_series, time_series_diff, diff_counts, args):
+def model_predict(trend_model_fit, residual_model_fit, 
+                  trend, residual, seasonal, 
+                  trend_diff_counts, residual_diff_counts, 
+                  if_pred, start, end, period):
     """
-    times_seris: original time_series, pd.Dataframe.
+    trend_model_fit: ARIMA model after fit the trend.
+    residual_model_fit: ARIMA model after fit the residual.
+    trend: time series of trend.
+    residual: time series of residual.
+    seasonal: time series of seasonal.
+    trend_diff_counts: int value indicating counts of diff for trend.
+    residual_diff_counts: int values indicating counts of diff for residual.
+    if_pred: boolen value indicating whether to predict or not. True presents predict, False means fit.
+    start: string value indicating start date.
+    end: string value indicating end date.
+    period: int value indicating the period of seasonal.
+    return predicted sequence.
+    """
+    if if_pred:
+        date_after_train = str(trend.index.tolist()[-1] + relativedelta(days=1))
+        trend_pred_seq = np.array(trend_model_fit.predict(start = date_after_train, 
+                                                          end = end,
+                                                          dynamic = True)) # The dynamic keyword affects in-sample prediction. 
+        trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
+                                                  trend_pred_seq)))
+        residual_pred_seq = np.array(residual_model_fit.predict(start = date_after_train,
+                                                                end = end,
+                                                                dynamic = True))
+        residual_pred_seq = np.array(np.concatenate((np.array(residual.diff(residual_diff_counts).fillna(0)),
+                                                     residual_pred_seq)))
+        # find the the corresponding seasonal sequence.
+        pred_period = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days + 1
+        seasonal_pred_seq = list(seasonal[len(seasonal) - period:len(seasonal)]) * (round((pred_period) / period) + 1) 
+        seasonal_pred_seq = np.array(seasonal_pred_seq[0:pred_period])
+    else:
+        trend_pred_seq = np.array(trend_model_fit.fittedvalues)
+        residual_pred_seq = np.array(residual_model_fit.fittedvalues)
+        seasonal_pred_seq = np.array(seasonal)
+
+    if trend_diff_counts > 0:
+        trend_pred_seq = trend_pred_seq + trend[0]
+    if residual_diff_counts > 0:
+        residual_pred_seq = residual_pred_seq + residual[0]
+    
+    while trend_diff_counts > 0 or residual_diff_counts > 0:
+        if trend_diff_counts > 0:
+            trend_pred_seq.cumsum()
+            trend_diff_counts -= 1
+        if residual_diff_counts > 0:
+            residual_pred_seq.cumsum()
+            residual_diff_counts -= 1
+    if if_pred:
+        return trend_pred_seq[len(trend_pred_seq)-len(seasonal_pred_seq):len(trend_pred_seq)] + \
+               residual_pred_seq[len(residual_pred_seq)-len(seasonal_pred_seq):len(residual_pred_seq)] + \
+               seasonal_pred_seq
+    else:
+        return trend_pred_seq + residual_pred_seq + seasonal_pred_seq
+
+
+def ARIMA_model(time_series_diff, args):
+    """
     time_series_diff: stationary time_series after diff. 
-    diff_counts: counts of diff when the time_series become stationary.
     args: arguments parsed before.
-    return fitted ARIMA model.
+    return fitted ARIMA model, parameters for ARIMA model.
     """
     # check if args.ic is illegal.
     if args.ic not in ["bic", "aic"]:
         logger.warning("The information criteria is illegal. Turn to default ic: BIC")
         args.ic = "bic"
+
+    # check the value of convergence tol.
+    if args.tol > 0.01:
+        logger.warning("The convergence tolerance is too large. Turn to use default value: 1e-8")
+        args.tol = 1e-8
+    
+    # check the likelihood function used.
+    if args.method not in ["css-mle", "mle", "css"]:
+        logger.warning("The likelihood function is illegal. Turn to default choice: css-mle")
+        args.method = "css-mle"
 
     evaluate = sm.tsa.arma_order_select_ic(time_series_diff,
                                            ic = args.ic,
@@ -66,27 +133,29 @@ def ARIMA_model(time_series, time_series_diff, diff_counts, args):
                                            max_ma = args.max_ma)
     # get the parameter for ARIMA model.
     min_order = evaluate[args.ic + "_min_order"]
-    # construct the ARIMA model.
-    logger.info("ARIMA parameters: " + str(tuple(min_order[0], diff_counts, min_order[1])))
-    model = ARIMA(timeseries, order=(min_order[0], diff_counts, min_order[1])) # d is the order of diff, which we have done that perviously.
 
-    # check the value of convergence tol.
-    if args.tol > 0.01:
-        logger.warning("The convergence tolerance is too large. Turn to use default value: 1e-8")
-        args.tol = 1e-8
+    # initial the success_flag to false
+    success_flag = False
+    while not success_flag:
+        # construct the ARIMA model.
+        model = ARIMA(time_series_diff, order=(min_order[0], 0, min_order[1])) # d is the order of diff, which we have done that perviously.
+        # keep finding initial parameters until convergence.
+        try:
+            model_fit = model.fit(disp = False, 
+                                start_params = np.random.rand(min_order[0] + min_order[1] + 1),
+                                method = args.method,
+                                trend = "c", # Some posts' experimentation suggests that ARIMA models may be less likely to converge with the trend term disabled, especially when using more than zero MA terms.
+                                transparams = True,
+                                solver = "lbfgs", # we turn to use this one, which gives the best RMSE & executation time.
+                                tol = args.tol, # The convergence tolerance. Default is 1e-08.
+                                )
+            success_flag = True
+        except ValueError:
+            logger.warning("ValueError occurs, choosing another starting parameters.")
+        except np.linalg.LinAlgError:
+            logger.warning("np.linalg.LinAlgError occurs, choosing another starting parameters.")
 
-    if args.method not in ["css-mle", "mle", "css"]:
-        logger.warning("The likelihood function is illegal. Turn to default choice: css-mle")
-        args.method = "css-mle"
-    
-    model_fit = model.fit(disp = False, 
-                          method = args.method,
-                          trend = "c", # Some posts' experimentation suggests that ARIMA models may be less likely to converge with the trend term disabled, especially when using more than zero MA terms.
-                          transparams = True,
-                          solver = "lbfgs", # we turn to use this one, which gives the best RMSE & executation time.
-                          tol = args.tol, # The convergence tolerance. Default is 1e-08.
-                          )
-    return model_fit
+    return model_fit, min_order
 
 
 def diff(time_series):
@@ -97,7 +166,7 @@ def diff(time_series):
     counts = 0 # indicating how many times the series diffs.
     copy_series = copy.deepcopy(time_series)
     # keep diff until ADF test's p-value is smaller than 1%.
-    while ADF(copy_series.tolist()[1]) > 0.01:
+    while ADF(copy_series.tolist())[1] > 0.01:
         copy_series = copy_series.diff(1)
         copy_series = copy_series.fillna(0)
         counts += 1
@@ -111,9 +180,9 @@ def decompose(time_series, season_period):
     return the decomposition of the time_series including trend, seasonal, residual.
     """    
     decomposition = seasonal_decompose(time_series, 
-                                       model='additive', 
+                                       model='additive', # additive model is the default choice.
                                        extrapolate_trend='freq', 
-                                       period=season_period) # additive model is the default choice.
+                                       period=season_period) 
     return decomposition.trend, decomposition.seasonal, decomposition.resid
 
 
@@ -133,7 +202,7 @@ def data_loader(tickers, month):
                                             data_source = source, 
                                             start = start_date + relativedelta(days = -1), 
                                             end = end_date))
-        else:
+        elif source == "yahoo":
             df = pd.DataFrame(wb.DataReader(ticker, 
                                             data_source = source, 
                                             start = start_date, 
@@ -164,7 +233,7 @@ def add_args():
     parser.add_argument('--max_ma', type=int, default=2,
                         help='Maximum number of MA lags to use. Default 2.')
 
-    parser.add_argument('--ic', type=str, default="BIC",
+    parser.add_argument('--ic', type=str, default="bic",
                         help='Information criteria to report. Either a single string or a list of different criteria is possible. Default BIC.')
 
     parser.add_argument('--tol', type=float, default=1e-8,
@@ -205,7 +274,8 @@ def main():
         ("TSLA", "yahoo"), # 0, TESLA Stock
     ]
     tsla_df = data_loader(tickers, args.month)[0] # get dataframes from "yahoo" finance.
-    tsla_close = tsla_df["Close"]
+    tsla_close = tsla_df["Close"].resample('D').ffill() # fullfill the time series.
+    logger.debug(tsla_close)
     logger.info("----------Data stop fetching------------")
 
     # data cleaning
@@ -220,7 +290,7 @@ def main():
     test = tsla_close[round(len(tsla_close) * args.split_ratio):len(tsla_close)]
 
     # time serise decomposition
-    trend, seasonal, resiudal = decompose(train, args.period)
+    trend, seasonal, residual = decompose(train, args.period)
 
     # difference
     logger.debug("-----------------Diff-----------------")
@@ -231,23 +301,55 @@ def main():
     
     # ARIMA model
     logger.info("-----------ARIMA construction----------")
-    trend_model_fit = ARIMA_model(trend, trend_diff, trend_diff_counts, args)
-    residual_model_fit = ARIMA_model(residual, residual_diff, residual_diff_counts, args)
+    trend_model_fit, trend_model_order = ARIMA_model(trend_diff, args)
+    logger.info("Trend model parameters: " + str(tuple([trend_model_order[0],
+                                                        trend_diff_counts,
+                                                        trend_model_order[1]])))
+    residual_model_fit, residual_model_order = ARIMA_model(residual_diff, args)
+    logger.info("Residual model parameters: " + str(tuple([residual_model_order[0],
+                                                          residual_diff_counts,
+                                                          residual_model_order[1]])))
 
     # model summary
     logger.debug("---------trend model summary----------")
     logger.debug(trend_model_fit.summary())
     logger.debug("---------resid model summary----------")
-    logger.deubg(residual_model_fit.summary())
+    logger.debug(residual_model_fit.summary())
 
     # loss calculation
-    logger.info("-----------loss calculation------------")
-    trend_fit_seq = trend_model_fit.fittedvalues
-    residual_fit_seq = residual_model_fit.fittedvalues
-    fit_seq = seasonal + trend_fit_seq + residual_fit_seq
+    logger.debug("--------------prediction--------------")
+    fit_seq = model_predict(trend_model_fit, residual_model_fit,
+                            trend, residual, seasonal, 
+                            trend_diff_counts, residual_diff_counts, 
+                            False, "", "", args.period)
+    logger.debug(fit_seq)
 
-    training_loss = loss(np.array(fit_seq), np.array(train), args.loss)
+    test_start = str(test.index.tolist()[0]).replace(" 00:00:00", "")
+    test_end = str(test.index.tolist()[-1]).replace(" 00:00:00", "")
+    pred_seq = model_predict(trend_model_fit, residual_model_fit,
+                            trend, residual, seasonal, 
+                            trend_diff_counts, residual_diff_counts, 
+                            True, test_start, test_end, args.period)
+    logger.debug(pred_seq) 
+
+    logger.info("-----------Loss calculation------------")
+    training_loss = loss(fit_seq, np.array(train), args.loss)
     logger.info("Training loss: " + str(training_loss))
+    testing_loss = loss(pred_seq, np.array(test), args.loss)
+    logger.info("Testing loss: " + str(testing_loss))
+
+    # prediction
+    logger.info("--------------prediction---------------")
+    prediction = model_predict(trend_model_fit, residual_model_fit,
+                               trend, residual, seasonal, 
+                               trend_diff_counts, residual_diff_counts, 
+                               True, "2020-12-07", "2020-12-11", args.period)
+    logger.info("2020-12-07 predicted value: " + str(prediction[0]))
+    logger.info("2020-12-08 predicted value: " + str(prediction[1]))
+    logger.info("2020-12-09 predicted value: " + str(prediction[2]))
+    logger.info("2020-12-10 predicted value: " + str(prediction[3]))
+    logger.info("2020-12-11 predicted value: " + str(prediction[4]))
+    logger.info("--------------Process ends-------------")
 
 if __name__ == "__main__":
     main()
