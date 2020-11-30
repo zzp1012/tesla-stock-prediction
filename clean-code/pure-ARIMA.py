@@ -19,13 +19,19 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.arima_model import ARIMA
 from sklearn.metrics import mean_squared_error, r2_score
 
+# ignore warnings
+import warnings
+from statsmodels.tools.sm_exceptions import ConvergenceWarning, HessianInversionWarning
+warnings.simplefilter("ignore", ConvergenceWarning)
+warnings.simplefilter("ignore", HessianInversionWarning)
+
 # set the logger
 logging.basicConfig(
                     # filename = "logfile",
                     # filemode = "w+",
                     format='%(name)s %(levelname)s %(message)s',
                     datefmt = "%H:%M:%S",
-                    level=logging.INFO)
+                    level=logging.ERROR)
 logger = logging.getLogger("ARIMA")
 
 
@@ -221,8 +227,8 @@ def add_args():
     parser.add_argument('--month', type=int, default=3,
                         help='The data ranges from several months ago to now. Default 4. Suggest that not too long period to avoid outliers in data.')
 
-    parser.add_argument('--period', type=int, default=4,
-                        help='The seasonal period. Default 4.')
+    parser.add_argument('--period', type=int, default=5,
+                        help='The seasonal period. Default 5.')
 
     parser.add_argument('--split_ratio', type=float, default=0.7,
                         help='Data splitting ratio. Default 0.7.')
@@ -249,6 +255,10 @@ def add_args():
     parser.add_argument("-v", "--verbose", action= "store_true", dest= "verbose", 
                         help= "Enable debug info output. Default false.")
 
+    # set if plots
+    parser.add_argument("-p", "--plot", action= "store_true", dest= "plot", 
+                        help= "Enable plots. Default false.")
+
     args = parser.parse_args()
     return args
 
@@ -268,17 +278,21 @@ def main():
     logger.info(args)
 
     # data fetching
-    logger.info("----------Data start fetching-----------")
+    logger.info("-------------Data fetching-------------")
     tickers = \
     [
         ("TSLA", "yahoo"), # 0, TESLA Stock
     ]
+    # check if data range is legal.
+    if  args.month <= 0 or args.month > 24:
+        logger.warning("The data range is illegal. Turn to use default 3")
+        args.month = 3
     tsla_df = data_loader(tickers, args.month)[0] # get dataframes from "yahoo" finance.
     tsla_close = tsla_df["Close"].resample('D').ffill() # fullfill the time series.
     logger.debug(tsla_close)
-    logger.info("----------Data stop fetching------------")
 
     # data cleaning
+    logger.info("-------------Data cleaning-------------")
     if np.sum(tsla_close.isnull()) > 0:
         logger.debug("The time series contain missing values & we use interpolation to resolve this issue")
         tsla_close = tsla_close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
@@ -286,10 +300,20 @@ def main():
     tsla_close = tsla_close.dropna()
 
     # data splitting
+    logger.info("-----------Data splitting--------------")
+    # check if split_ratio legal.
+    if args.split_ratio > 1 or round(len(tsla_close) * args.split_ratio) <= 0:
+        logger.warning("Splitting ratio is illegal. Turn to use default 0.7")
+        args.split_ratio = 0.7
     train = tsla_close[0:round(len(tsla_close) * args.split_ratio)]
     test = tsla_close[round(len(tsla_close) * args.split_ratio):len(tsla_close)]
 
     # time serise decomposition
+    logger.info("------------decomposition--------------")
+    # check if period is legal.
+    if args.period < 2:
+        logger.warning("Seasonal period is illegal. Turn to use default 5.")
+        args.period = 5
     trend, seasonal, residual = decompose(train, args.period)
 
     # difference
@@ -317,26 +341,28 @@ def main():
     logger.debug(residual_model_fit.summary())
 
     # loss calculation
-    logger.debug("--------------prediction--------------")
+    logger.info("-----------Loss calculation------------")
     fit_seq = model_predict(trend_model_fit, residual_model_fit,
                             trend, residual, seasonal, 
                             trend_diff_counts, residual_diff_counts, 
                             False, "", "", args.period)
     logger.debug(fit_seq)
 
-    test_start = str(test.index.tolist()[0]).replace(" 00:00:00", "")
-    test_end = str(test.index.tolist()[-1]).replace(" 00:00:00", "")
-    pred_seq = model_predict(trend_model_fit, residual_model_fit,
-                            trend, residual, seasonal, 
-                            trend_diff_counts, residual_diff_counts, 
-                            True, test_start, test_end, args.period)
-    logger.debug(pred_seq) 
-
-    logger.info("-----------Loss calculation------------")
+    # calculate training loss
     training_loss = loss(fit_seq, np.array(train), args.loss)
     logger.info("Training loss: " + str(training_loss))
-    testing_loss = loss(pred_seq, np.array(test), args.loss)
-    logger.info("Testing loss: " + str(testing_loss))
+
+    if list(test):
+        test_start = str(test.index.tolist()[0]).replace(" 00:00:00", "")
+        test_end = str(test.index.tolist()[-1]).replace(" 00:00:00", "")
+        pred_seq = model_predict(trend_model_fit, residual_model_fit,
+                                trend, residual, seasonal, 
+                                trend_diff_counts, residual_diff_counts, 
+                                True, test_start, test_end, args.period)
+        logger.debug(pred_seq) 
+
+        testing_loss = loss(pred_seq, np.array(test), args.loss)
+        logger.info("Testing loss: " + str(testing_loss))
 
     # prediction
     logger.info("--------------prediction---------------")
