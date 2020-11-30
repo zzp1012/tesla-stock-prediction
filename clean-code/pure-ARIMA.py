@@ -72,19 +72,22 @@ def model_predict(trend_model_fit, residual_model_fit,
     return predicted sequence.
     """
     if if_pred:
+        # get the first date after the last date in train.
         date_after_train = str(trend.index.tolist()[-1] + relativedelta(days=1))
+        # get the trend predicted sequence from the start of start to end
         trend_pred_seq = np.array(trend_model_fit.predict(start = date_after_train, 
                                                           end = end,
                                                           dynamic = True)) # The dynamic keyword affects in-sample prediction. 
         trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
                                                   trend_pred_seq)))
+        # get the residual predicted sequence from the start of start to end
         residual_pred_seq = np.array(residual_model_fit.predict(start = date_after_train,
                                                                 end = end,
                                                                 dynamic = True))
         residual_pred_seq = np.array(np.concatenate((np.array(residual.diff(residual_diff_counts).fillna(0)),
                                                      residual_pred_seq)))
         # find the the corresponding seasonal sequence.
-        pred_period = (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days + 1
+        pred_period = (datetime.datetime.strptime(end, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(date_after_train, '%Y-%m-%d %H:%M:%S')).days + 1
         seasonal_pred_seq = list(seasonal[len(seasonal) - period:len(seasonal)]) * (round((pred_period) / period) + 1) 
         seasonal_pred_seq = np.array(seasonal_pred_seq[0:pred_period])
     else:
@@ -105,9 +108,10 @@ def model_predict(trend_model_fit, residual_model_fit,
             residual_pred_seq.cumsum()
             residual_diff_counts -= 1
     if if_pred:
-        return trend_pred_seq[len(trend_pred_seq)-len(seasonal_pred_seq):len(trend_pred_seq)] + \
-               residual_pred_seq[len(residual_pred_seq)-len(seasonal_pred_seq):len(residual_pred_seq)] + \
-               seasonal_pred_seq
+        pred_period = (datetime.datetime.strptime(end, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(start, '%Y-%m-%d %H:%M:%S')).days + 1
+        return trend_pred_seq[len(trend_pred_seq)-pred_period:len(trend_pred_seq)] + \
+               residual_pred_seq[len(residual_pred_seq)-pred_period:len(residual_pred_seq)] + \
+               seasonal_pred_seq[len(seasonal_pred_seq)- pred_period:len(seasonal_pred_seq)]
     else:
         return trend_pred_seq + residual_pred_seq + seasonal_pred_seq
 
@@ -176,7 +180,7 @@ def diff(time_series, if_plot, name):
     copy_series = copy.deepcopy(time_series)
     # keep diff until ADF test's p-value is smaller than 1%.
     while ADF(copy_series.tolist())[1] > 0.01:
-        logger.info("time " + str(counts) + "ADF test: " + str(ADF(copy_series.tolist())))
+        logger.info("time " + str(counts) + " ADF test: " + str(ADF(copy_series.tolist())))
         copy_series = copy_series.diff(1)
         copy_series = copy_series.fillna(0)
         counts += 1
@@ -203,8 +207,9 @@ def decompose(time_series, season_period, if_plot):
     return the decomposition of the time_series including trend, seasonal, residual.
     """    
     decomposition = seasonal_decompose(time_series, 
-                                       model='additive', # additive model is the default choice.
-                                       extrapolate_trend='freq', 
+                                       model='additive', # additive model is the default choice. 
+                                                         # We tried "multiplicative" but it is totally meaningless.
+                                       extrapolate_trend='freq',
                                        period=season_period) 
     trend = decomposition.trend
     seasonal = decomposition.seasonal
@@ -345,7 +350,7 @@ def main():
     tsla_close = tsla_close.dropna()
 
     # data splitting
-    logger.info("-----------Data splitting--------------")
+    logger.info("-------------Data splitting------------")
     # check if split_ratio legal.
     if args.split_ratio > 1 or round(len(tsla_close) * args.split_ratio) <= 0:
         logger.warning("Splitting ratio is illegal. Turn to use default 0.7")
@@ -354,7 +359,7 @@ def main():
     test = tsla_close[round(len(tsla_close) * args.split_ratio):len(tsla_close)]
 
     # time serise decomposition
-    logger.info("------------decomposition--------------")
+    logger.info("-------------decomposition-------------")
     # check if period is legal.
     if args.period < 2:
         logger.warning("Seasonal period is illegal. Turn to use default 5.")
@@ -429,14 +434,13 @@ def main():
         plt.close()
 
     if list(test):
-        test_start = str(test.index.tolist()[0]).replace(" 00:00:00", "")
-        test_end = str(test.index.tolist()[-1]).replace(" 00:00:00", "")
         pred_seq = model_predict(trend_model_fit, residual_model_fit,
                                 trend, residual, seasonal, 
                                 trend_diff_counts, residual_diff_counts, 
-                                True, test_start, test_end, args.period)
+                                True, str(test.index.tolist()[0]), str(test.index.tolist()[-1]), args.period)
         logger.debug(pred_seq) 
 
+        # calculate testing loss
         testing_loss = loss(pred_seq, np.array(test), args.loss)
         logger.info("Testing loss: " + str(testing_loss))
 
@@ -454,7 +458,7 @@ def main():
     prediction = model_predict(trend_model_fit, residual_model_fit,
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
-                               True, "2020-12-07", "2020-12-11", args.period)
+                               True, "2020-12-07 00:00:00", "2020-12-11 00:00:00", args.period)
     logger.info("2020-12-07 predicted value: " + str(prediction[0]))
     logger.info("2020-12-08 predicted value: " + str(prediction[1]))
     logger.info("2020-12-09 predicted value: " + str(prediction[2]))
