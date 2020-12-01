@@ -23,9 +23,12 @@ from statsmodels.graphics.tsaplots import plot_acf, plot_pacf # plot acf and pac
 # ignore warnings
 import warnings
 from statsmodels.tools.sm_exceptions import ConvergenceWarning, HessianInversionWarning
+from arch.utility.exceptions import data_scale_warning
 warnings.simplefilter("ignore", ConvergenceWarning)
 warnings.simplefilter("ignore", HessianInversionWarning)
 warnings.simplefilter("ignore", RuntimeWarning)
+warnings.simplefilter("ignore", FutureWarning)
+warnings.simplefilter("ignore", data_scale_warning)
 
 # set the logger
 logging.basicConfig(

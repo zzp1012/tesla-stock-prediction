@@ -41,6 +41,20 @@ logging.basicConfig(
 logger = logging.getLogger("GARCH")
 
 
+def plot_pvalue(pvalue, name):
+    """
+    pvalue:
+    name: used for later label and title.
+    effect:
+    """
+    plt.figure()
+    plt.plot(pvalue)
+    plt.plot(list(range(len(pvalue))), [0.05] * len(pvalue))
+    plt.title(name.replace("_", " ") + " Test, P Value Plot")
+    plt.savefig(name + "_test_pvalue.png")
+    plt.close()
+
+
 def plot_residual(resid, name):
     """
     resid:
@@ -213,7 +227,7 @@ def model_predict(trend_arima_fit, residual_arima_fit,
             trend_model_fit = trend_model.fit(disp = "off",
                                               update_freq = 0,
                                               show_warning = False)
-            trend_pred_variance[i] = np.sqrt(trend_model_fit.forecast(horizon = 1).variance.values[-1,:][0])
+            trend_pred_variance[i] = np.sqrt(trend_model_fit.forecast(horizon = 1).variance.values[-1,:][0]) + trend_model_fit.forecast(horizon = 1).mean.values[-1,:][0]
             current_trend_resid.append(pd.DataFrame.from_dict({current_trend_resid.index.tolist()[-1] + relativedelta(days= 1): trend_pred_variance[i]}, orient = "index"))
 
             residual_model = arch_model(current_residual_resid,
@@ -224,10 +238,10 @@ def model_predict(trend_arima_fit, residual_arima_fit,
             residual_model_fit = residual_model.fit(disp = "off",
                                                     update_freq = 0,
                                                     show_warning = False)
-            residual_pred_variance[i] = np.sqrt(residual_model_fit.forecast(horizon = 1).variance.values[-1,:][0])
+            residual_pred_variance[i] = np.sqrt(residual_model_fit.forecast(horizon = 1).variance.values[-1,:][0]) + residual_model_fit.forecast(horizon = 1).mean.values[-1,:][0]
             current_residual_resid.append(pd.DataFrame.from_dict({current_residual_resid.index.tolist()[-1] + relativedelta(days= 1): residual_pred_variance[i]}, orient = "index"))
 
-        trend_pred_seq = trend_pred_seq + trend_pred_variance
+        trend_pred_seq = trend_pred_seq + trend_pred_variance 
         residual_pred_seq = residual_pred_seq + residual_pred_variance
 
         trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
@@ -382,6 +396,8 @@ def mix_model(time_series_diff, args, name):
                                return_df=False
                                )
     logger.info("acorr_ljungbox: " + str(list(pvalue)))
+    if args.plot:
+        plot_pvalue(pvalue, "acorr_ljungbox")
     if np.sum(pvalue < 0.05) > 0:
         logger.info("residual after fit still can not give white noises, we turn to use GARCH")
     else:
@@ -409,7 +425,7 @@ def diff(time_series, if_plot, name, if_diff):
         return copy_series, counts
     
     # keep diff until ADF test's p-value is smaller than 1%.
-    while ADF(copy_series.tolist())[1] > 0.01:
+    while ADF(copy_series.tolist())[1] > 0.05:
         logger.info("time " + str(counts) + " ADF test: " + str(ADF(copy_series.tolist())))
         copy_series = copy_series.diff(1)
         copy_series = copy_series.fillna(0)
@@ -511,7 +527,7 @@ def add_args():
     parser = argparse.ArgumentParser(description="TSLA-ARIMA-GARCH")
 
     # hyperparameters setting
-    parser.add_argument('--month', type=int, default=3,
+    parser.add_argument('--month', type=int, default=4,
                         help='The data ranges from several months ago to now. Default 4. Suggest that not too long period to avoid outliers in data.')
 
     parser.add_argument('--period', type=int, default=7,
@@ -590,8 +606,8 @@ def main():
     ]
     # check if data range is legal.
     if  args.month <= 0 or args.month > 24:
-        logger.warning("The data range is illegal. Turn to use default 3")
-        args.month = 3
+        logger.warning("The data range is illegal. Turn to use default 4")
+        args.month = 4
     tsla_df = data_loader(tickers, args.month)[0] # get dataframes from "yahoo" finance.
     tsla_close = tsla_df["Close"].resample('D').ffill() # fullfill the time series.
 
@@ -729,6 +745,11 @@ def main():
     logger.info("2020-12-09 predicted value: " + str(prediction[2]))
     logger.info("2020-12-10 predicted value: " + str(prediction[3]))
     logger.info("2020-12-11 predicted value: " + str(prediction[4]))
+
+    logger.info("--------------File write---------------")
+    with open("group_7.txt", "w+") as f:
+        for pred in list(prediction):
+            f.write("{:.3f}\n".format(pred))
     logger.info("--------------Process ends-------------")
 
 if __name__ == "__main__":
