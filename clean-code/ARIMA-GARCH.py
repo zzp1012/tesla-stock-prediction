@@ -29,6 +29,7 @@ from statsmodels.tools.sm_exceptions import ConvergenceWarning, HessianInversion
 warnings.simplefilter("ignore", ConvergenceWarning)
 warnings.simplefilter("ignore", HessianInversionWarning)
 warnings.simplefilter("ignore", RuntimeWarning)
+warnings.simplefilter("ignore", FutureWarning)
 
 # set the logger
 logging.basicConfig(
@@ -39,6 +40,113 @@ logging.basicConfig(
                     level=logging.ERROR)
 logger = logging.getLogger("GARCH")
 
+
+def plot_residual(resid, name):
+    """
+    resid:
+    name: used for later label and title.
+    effect:
+    """
+    resid.plot()
+    plt.title(name + " Residual Plot")
+    plt.savefig(name + "_resid_plt.png")
+    plt.close()
+    resid.plot(kind='kde')
+    plt.title(name + " KDE Residual Plot")
+    plt.savefig(name + "_kde_resid_plt.png")
+    plt.close()
+
+def plot_pred_vs_truth(y_pred, y_truth, label1, label2):
+    """
+    """
+    plt.figure()
+    plt.plot(y_pred, color='red', label=label1)
+    plt.plot(y_truth, color ='blue', label=label2)
+    plt.legend(loc='best')
+    plt.title(label1 + " v.s. " + label2)
+    plt.savefig(label1 + "_vs_" + label2 + ".png")
+    plt.close()
+
+
+def plot_description(time_series, name):
+    """
+    time_series: 
+    name: used for later label and title.
+    effect:
+    """
+    fig = plt.gcf()
+    fig.set_size_inches(18.5, 10.5)
+    plt.plot(time_series, label = "Series")
+    plt.plot(time_series.rolling(int(.05 * len(time_series))).mean(), '--', 
+                label = "Rolling mean")
+    plt.plot(time_series.rolling(int(.05 * len(time_series))).std(), ":",
+                label = "Rolling Std")
+    plt.title("Overview Description Plot of " + name.replace("_", " "))
+    if name == "tsla_close":
+        plt.ylabel("stock price")
+    plt.xlabel("days")
+    plt.legend(loc = "best")
+    plt.savefig(name + "_description.png")
+    plt.close()
+
+
+def plot_decomposition(time_series, trend, seasonal, residual):
+    """
+    time_series: 
+    trend:
+    seasonal:
+    residual:
+    effect:
+    """
+    plt.figure(figsize=(12, 7))
+    plt.subplot(411)
+    plt.title("Seasonal Decomposition")
+    plt.plot(time_series, label='Original')
+    plt.legend(loc='best')
+    plt.subplot(412)
+    plt.plot(trend, label='Trend')
+    plt.legend(loc='best')
+    plt.subplot(413)
+    plt.plot(seasonal, label='Seasonarity')
+    plt.legend(loc='best')
+    plt.subplot(414)
+    plt.plot(residual, label='Residual')
+    plt.legend(loc='best')
+    plt.savefig("decomposition.png")
+    plt.close()
+
+
+def plot_diff(time_series, copy_series, counts, name):
+    """
+    time_series: 
+    copy_series:
+    counts:
+    name: used for later label and title.
+    effect:
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(time_series, label='Original', color='blue')
+    plt.plot(copy_series, label='Diff' + str(counts), color='red')
+    plt.title(name + " v.s. Time Series After Difference")
+    plt.legend(loc='best')
+    plt.savefig(name + "_diff.png")
+    plt.close()
+
+
+def plot_acf_pacf(time_series, name):
+    """
+    time_series: the time series which used to plot.
+    name: used for later label and title
+    effect: save the plot of acf and pacf.
+    """
+    fig = plt.figure(figsize=(12, 8))
+    ax1 = fig.add_subplot(211)
+    plot_acf(time_series.tolist(), lags = 50, ax = ax1)
+    ax2 = fig.add_subplot(212)
+    plot_pacf(time_series.tolist(), lags = 50, ax = ax2)
+    plt.title(name.replace("_", " ") + " ACF & PACF Plot")
+    plt.savefig(name + "_acf_pacf.png")
+    plt.close()
 
 def loss(y_pred, y_truth, loss_func):
     """
@@ -58,15 +166,15 @@ def loss(y_pred, y_truth, loss_func):
 
 
 def model_predict(trend_arima_fit, residual_arima_fit, 
-                  trend_garch_fit, residual_garch_fit,
+                  trend_garch_order, residual_garch_order,
                   trend, residual, seasonal, 
                   trend_diff_counts, residual_diff_counts, 
                   if_pred, start, end, period):
     """
     trend_arima_fit: ARIMA model after fit the trend.
     residual_arima_fit: ARIMA model after fit the residual.
-    trend_garch_fit: GARCH model after fit the trend_arima_fit.resid.
-    residual_garch_fit: GARCH model after fit the residual_arima_fit.resid.
+    trend_garch_order: best parameters for GARCH model after fit the trend_arima_fit.resid.
+    residual_garch_order: best parameters for GARCH model after fit the residual_arima_fit.resid.
     trend: time series of trend.
     residual: time series of residual.
     seasonal: time series of seasonal.
@@ -85,16 +193,47 @@ def model_predict(trend_arima_fit, residual_arima_fit,
         trend_pred_seq = np.array(trend_arima_fit.predict(start = date_after_train, 
                                                           end = end,
                                                           dynamic = True)) # The dynamic keyword affects in-sample prediction. 
-        trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
-                                                  trend_pred_seq)))
+        
         # get the residual predicted sequence from the start of start to end
         residual_pred_seq = np.array(residual_arima_fit.predict(start = date_after_train,
                                                                 end = end,
                                                                 dynamic = True))
-        residual_pred_seq = np.array(np.concatenate((np.array(residual.diff(residual_diff_counts).fillna(0)),
-                                                     residual_pred_seq)))
+        
         # find the the corresponding seasonal sequence.
         pred_period = (datetime.datetime.strptime(end, '%Y-%m-%d %H:%M:%S') - datetime.datetime.strptime(date_after_train, '%Y-%m-%d %H:%M:%S')).days + 1
+        
+        trend_pred_variance, residual_pred_variance = np.zeros(pred_period), np.zeros(pred_period)
+        current_trend_resid, current_residual_resid = trend_arima_fit.resid, residual_arima_fit.resid
+        for i in range(pred_period):
+            trend_model = arch_model(current_trend_resid,
+                                     mean = "Constant",
+                                     p = trend_garch_order[0], 
+                                     q = trend_garch_order[1], 
+                                     vol = 'GARCH')
+            trend_model_fit = trend_model.fit(disp = "off",
+                                              update_freq = 0,
+                                              show_warning = False)
+            trend_pred_variance[i] = np.sqrt(trend_model_fit.forecast(horizon = 1).variance.values[-1,:][0])
+            current_trend_resid.append(pd.DataFrame.from_dict({current_trend_resid.index.tolist()[-1] + relativedelta(days= 1): trend_pred_variance[i]}, orient = "index"))
+
+            residual_model = arch_model(current_residual_resid,
+                                        mean = "Constant",
+                                        p = residual_garch_order[0], 
+                                        q = residual_garch_order[1], 
+                                        vol = 'GARCH')
+            residual_model_fit = residual_model.fit(disp = "off",
+                                                    update_freq = 0,
+                                                    show_warning = False)
+            residual_pred_variance[i] = np.sqrt(residual_model_fit.forecast(horizon = 1).variance.values[-1,:][0])
+            current_residual_resid.append(pd.DataFrame.from_dict({current_residual_resid.index.tolist()[-1] + relativedelta(days= 1): residual_pred_variance[i]}, orient = "index"))
+
+        trend_pred_seq = trend_pred_seq + trend_pred_variance
+        residual_pred_seq = residual_pred_seq + residual_pred_variance
+
+        trend_pred_seq = np.array(np.concatenate((np.array(trend.diff(trend_diff_counts).fillna(0)),
+                                                  trend_pred_seq)))
+        residual_pred_seq = np.array(np.concatenate((np.array(residual.diff(residual_diff_counts).fillna(0)),
+                                                     residual_pred_seq)))
         seasonal_pred_seq = list(seasonal[len(seasonal) - period:]) * (round((pred_period) / period) + 1) 
         seasonal_pred_seq = np.array(seasonal_pred_seq[0:pred_period])
     else:
@@ -128,28 +267,24 @@ def GARCH_model(resid, args, name):
     resid: stationary residual time_series after ARIMA. 
     args: arguments parsed before.
     name: the name of time_series_diff.
-    return fitted GARCH model, parameters for GARCH model.
+    return best parameters for GARCH model.
     """
     if args.plot:
         # plot acf and pacf for stationary time series
         # if we can find some autocorrelations from the graph, then we should use GARCH.
-        fig, axes = plt.subplots(2, 1, figsize = (8,6), dpi = 100)
-        plot_acf(resid.tolist(), lags = 50, ax = axes[0])
-        plot_pacf(resid.tolist(), lags = 50, ax = axes[1])
-        plt.savefig("GARCH_" + name + "_acf_pacf.png")
-        plt.close()
+        plot_acf_pacf(resid, "GARCH_" + name + "_resid")
 
     best_criteria = np.inf 
     best_model_order = (0, 0)
-    best_model = None
+    best_model_fit = None
     for p in range(args.max_p):
         for q in range(args.max_q):
             try:
-                model = arch.arch_model(resid,
-                                        mean = 'Zero',
-                                        p = p, 
-                                        q = q, 
-                                        vol = 'GARCH')
+                model = arch_model(resid,
+                                   mean = "Constant",
+                                   p = p, 
+                                   q = q, 
+                                   vol = 'GARCH')
                 model_fit = model.fit(disp = "off",
                                       update_freq = 0,
                                       tol = args.tol,
@@ -161,12 +296,12 @@ def GARCH_model(resid, args, name):
                     current_criteria = model_fit.bic
                 
                 if current_criteria <= best_criteria:
-                    best_criteria, best_model_order, best_model = np.round(current_criteria, 0), (p, q), model_fit
+                    best_criteria, best_model_order, best_model_fit = np.round(current_criteria, 0), (p, q), model_fit
             except:
                 logger.warning("Error occurs, try another combination of p and q.")
                 pass
 
-    return best_model, best_model_order
+    return best_model_fit, best_model_order
 
 
 def ARIMA_model(time_series_diff, args, name):
@@ -178,11 +313,7 @@ def ARIMA_model(time_series_diff, args, name):
     """
     if args.plot:
         # plot acf and pacf for stationary time series
-        fig, axes = plt.subplots(2, 1, figsize = (8,6), dpi = 100)
-        plot_acf(time_series_diff.tolist(), lags = 50, ax = axes[0])
-        plot_pacf(time_series_diff.tolist(), lags = 50, ax = axes[1])
-        plt.savefig("ARIMA_" + name + "_acf_pacf.png")
-        plt.close()
+        plot_acf_pacf(time_series_diff, "ARIMA_" +  str(name) + "_diff")
 
     # find the optimal order of ARIMA model.
     evaluate = sm.tsa.arma_order_select_ic(time_series_diff,
@@ -242,18 +373,14 @@ def mix_model(time_series_diff, args, name):
 
     if args.plot:
         # residual plots of residual model
-        arima_model_fit.resid.plot()
-        plt.savefig(name + "_resid_plt.png")
-        plt.close()
-        arima_model_fit.resid.plot(kind='kde')
-        plt.savefig(name + "_kde_resid_plt.png")
-        plt.close()
+        plot_residual(arima_model_fit.resid, name)
 
     # check if the resid of arima model is white noise
     _, pvalue = acorr_ljungbox(arima_model_fit.resid,
+                               # auto_lag=True,
                                model_df=sum(arima_order),
-                               return_df=False, 
-                               auto_lag=True)
+                               return_df=False
+                               )
     logger.info("acorr_ljungbox: " + str(list(pvalue)))
     if np.sum(pvalue < 0.05) > 0:
         logger.info("residual after fit still can not give white noises, we turn to use GARCH")
@@ -263,19 +390,24 @@ def mix_model(time_series_diff, args, name):
     # get garch model
     garch_model_fit, garch_order = GARCH_model(arima_model_fit.resid, args, name)
 
-    return arima_model_fit, arima_order \
-           garch_model_fit, garch_order
+    return arima_model_fit, arima_order, garch_model_fit, garch_order
 
 
-def diff(time_series, if_plot, name):
+def diff(time_series, if_plot, name, if_diff):
     """
     times_seris: time_series, pd.Dataframe.
     if_plot: boolen value indicating whether to plot.
     name: string value indicating name of the time series.
+    if_diff: boolen value indicating whether to diff.
     return stationary time_series, counts of diff when the time_series become stationary.
     """
     counts = 0 # indicating how many times the series diffs.
     copy_series = copy.deepcopy(time_series)
+
+    # directly return if_diff False.
+    if not if_diff:
+        return copy_series, counts
+    
     # keep diff until ADF test's p-value is smaller than 1%.
     while ADF(copy_series.tolist())[1] > 0.01:
         logger.info("time " + str(counts) + " ADF test: " + str(ADF(copy_series.tolist())))
@@ -287,12 +419,7 @@ def diff(time_series, if_plot, name):
 
     # plot diff and original time series in one graph.
     if if_plot:
-        plt.figure(figsize=(10, 5))
-        plt.plot(time_series, label='Original', color='blue')
-        plt.plot(copy_series, label='Diff' + str(counts), color='red')
-        plt.legend(loc='best')
-        plt.savefig(name + "_diff.png")
-        plt.close()
+        plot_diff(time_series, copy_series, counts, name)
     
     return copy_series, counts
 
@@ -324,21 +451,7 @@ def decompose(time_series, season_period, if_plot):
 
     # plot the time series decomposition
     if if_plot:
-        plt.figure(figsize=(12, 7))
-        plt.subplot(411)
-        plt.plot(time_series, label='Original')
-        plt.legend(loc='best')
-        plt.subplot(412)
-        plt.plot(trend, label='Trend')
-        plt.legend(loc='best')
-        plt.subplot(413)
-        plt.plot(seasonal, label='Seasonarity')
-        plt.legend(loc='best')
-        plt.subplot(414)
-        plt.plot(residual, label='Residual')
-        plt.legend(loc='best')
-        plt.savefig("decomposition.png")
-        plt.close()
+        plot_decomposition(time_series, trend, seasonal, residual)
 
     return trend, seasonal, residual
 
@@ -437,6 +550,9 @@ def add_args():
     parser.add_argument('--max_q', type=int, default=4,
                         help='Maximum lag order of lagged volatility or equivalent. Default 4.')
 
+    parser.add_argument("-d", "--diff", action="store_false", dest="diff", 
+                        help= "Disable difference. Default True.")                    
+
     # set if using debug mod
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", 
                         help= "Enable debug info output. Default false.")
@@ -488,17 +604,11 @@ def main():
     tsla_close = tsla_close.dropna()
     logger.debug(tsla_close)
 
+    # data analyzing.
+    logger.info("ADF test for tsla Close: " + str(ADF(tsla_close.tolist())[1]))
     # plot the graph describe tsla close
     if args.plot:
-        fig = plt.gcf()
-        fig.set_size_inches(18.5, 10.5)
-        plt.plot(tsla_close, label = "Series")
-        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).mean(), '--', 
-                 label = "Rolling mean")
-        plt.plot(tsla_close.rolling(int(.05 * len(tsla_close))).std(), ":",
-                 label = "Rolling Std")
-        plt.legend(loc = "best")
-        plt.savefig("tesla_description.png")
+        plot_description(tsla_close, "tesla_close")
 
     # if log transformation
     if args.log:
@@ -526,24 +636,27 @@ def main():
         args.period = 7
     trend, seasonal, residual = decompose(train, args.period, args.plot)
 
+    # EDA of decomposed data, trend and residual
+    if args.plot:
+        plot_description(trend, "trend")
+        plot_description(residual, "residual")
+
     # difference
     logger.debug("-----------------Diff-----------------")
-    trend_diff, trend_diff_counts = diff(trend, args.plot, "trend")
+    trend_diff, trend_diff_counts = diff(trend, args.plot, "trend", args.diff)
     logger.debug("trend diff counts: " + str(trend_diff_counts))
-    residual_diff, residual_diff_counts = diff(residual, args.plot, "residual")
+    residual_diff, residual_diff_counts = diff(residual, args.plot, "residual", args.diff)
     logger.debug("residual diff counts: " + str(residual_diff_counts))
     
     # ARIMA model
     logger.info("-------ARIMA GARCH construction--------")
-    trend_arima_fit, trend_arima_order \ 
-    trend_garch_fit, trend_garch_order = mix_model(trend_diff, args, "trend_diff")
+    trend_arima_fit, trend_arima_order, trend_garch_fit, trend_garch_order = mix_model(trend_diff, args, "trend")
     logger.info("Trend ARIMA parameters: " + str(tuple([trend_arima_order[0],
                                                         trend_diff_counts,
                                                         trend_arima_order[1]])))
     logger.info("Trend GARCH parameters: " + str(trend_garch_order))
-    residual_arima_fit, residual_arima_order \ 
-    residual_garch_fit, residual_garch_order = mix_model(residual_diff, args, "residual_diff")
-    logger.info("Residual ARIMA parameters: " + str(tuple([residual_model_order[0],
+    residual_arima_fit, residual_arima_order, residual_garch_fit, residual_garch_order = mix_model(residual_diff, args, "residual")
+    logger.info("Residual ARIMA parameters: " + str(tuple([residual_arima_order[0],
                                                           residual_diff_counts,
                                                           residual_arima_order[1]])))
     logger.info("Residual GARCH parameters: " + str(residual_garch_order))
@@ -551,21 +664,22 @@ def main():
     # model summary
     logger.debug("---------trend ARIMA summary----------")
     logger.debug(trend_arima_fit.summary())
-    logger.debug("---------trend GARCH summary----------")
-    logger.debug(trend_garch_fit.summary())
     logger.debug("---------resid ARIMA summary----------")
     logger.debug(residual_arima_fit.summary())
+    logger.debug("---------trend ARIMA summary----------")
+    logger.debug(trend_garch_fit.summary())
     logger.debug("---------resid GARCH summary----------")
     logger.debug(residual_garch_fit.summary())
 
     logger.debug("-----trend model residual describe----")
-    logger.debug(trend_model_fit.resid.describe()) # describe the dataframe 
+    logger.debug(trend_arima_fit.resid.describe()) # describe the dataframe 
     logger.debug("-----resid model residual describe----")
-    logger.debug(residual_model_fit.resid.describe()) # describe the dataframe
+    logger.debug(residual_arima_fit.resid.describe()) # describe the dataframe
 
     # loss calculation
     logger.info("-----------Loss calculation------------")
-    fit_seq = model_predict(trend_model_fit, residual_model_fit,
+    fit_seq = model_predict(trend_arima_fit, residual_arima_fit,
+                            trend_garch_order, residual_garch_order,
                             trend, residual, seasonal, 
                             trend_diff_counts, residual_diff_counts, 
                             False, "", "", args.period)
@@ -580,15 +694,11 @@ def main():
 
     # plot train and fitted values in one graph.
     if args.plot:
-        plt.figure()
-        plt.plot(fit_seq, color='red', label='fit')
-        plt.plot(np.array(train), color ='blue', label='train')
-        plt.legend(loc='best')
-        plt.savefig('fit_vs_train.png')
-        plt.close()
+        plot_pred_vs_truth(fit_seq, np.array(train), "fit", "train")
 
     if list(test):
-        pred_seq = model_predict(trend_model_fit, residual_model_fit,
+        pred_seq = model_predict(trend_arima_fit, residual_arima_fit,
+                                trend_garch_order, residual_garch_order,
                                 trend, residual, seasonal, 
                                 trend_diff_counts, residual_diff_counts, 
                                 True, str(test.index.tolist()[0]), str(test.index.tolist()[-1]), args.period)
@@ -603,16 +713,12 @@ def main():
 
         # plot test and predicted value in one graph.
         if args.plot:
-            plt.figure()
-            plt.plot(pred_seq, color = "red", label = "pred")
-            plt.plot(np.array(test), color = "blue", label = "test")
-            plt.legend(loc="best")
-            plt.savefig("pred_vs_test.png")
-            plt.close()
+            plot_pred_vs_truth(pred_seq, np.array(test), "pred", "test")
 
     # prediction
     logger.info("--------------prediction---------------")
-    prediction = model_predict(trend_model_fit, residual_model_fit,
+    prediction = model_predict(trend_arima_fit, residual_arima_fit,
+                               trend_garch_order, residual_garch_order,
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
                                True, "2020-12-07 00:00:00", "2020-12-11 00:00:00", args.period)

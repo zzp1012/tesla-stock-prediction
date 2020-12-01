@@ -124,11 +124,12 @@ def ARIMA_model(time_series_diff, args, name):
     name: the name of time_series_diff.
     return fitted ARIMA model, parameters for ARIMA model.
     """
-    fig, axes = plt.subplots(1,2, figsize=(16,3), dpi= 100)
-    plot_acf(time_series_diff.tolist(), lags=50, ax=axes[0])
-    plot_pacf(time_series_diff.tolist(), lags=50, ax=axes[1])
-    plt.savefig(name + "_acf_pacf.png")
-    plt.close()
+    if args.plot and name in ["trend_diff", "residual_diff"]:
+        fig, axes = plt.subplots(1,2, figsize=(16,3), dpi= 100)
+        plot_acf(time_series_diff.tolist(), lags=min(50, len(time_series_diff) - 1), ax=axes[0])
+        plot_pacf(time_series_diff.tolist(), lags=min(50, len(time_series_diff) - 1), ax=axes[1])
+        plt.savefig(name + "_acf_pacf.png")
+        plt.close()
 
     # check if args.ic is illegal.
     if args.ic not in ["bic", "aic"]:
@@ -176,15 +177,21 @@ def ARIMA_model(time_series_diff, args, name):
     return model_fit, min_order
 
 
-def diff(time_series, if_plot, name):
+def diff(time_series, if_plot, name, if_diff):
     """
     times_seris: time_series, pd.Dataframe.
     if_plot: boolen value indicating whether to plot.
     name: string value indicating name of the time series.
+    if_diff: boolen value indicating whether to diff.
     return stationary time_series, counts of diff when the time_series become stationary.
     """
     counts = 0 # indicating how many times the series diffs.
     copy_series = copy.deepcopy(time_series)
+    
+    # directly return if_diff False.
+    if not if_diff:
+        return copy_series, counts
+    
     # keep diff until ADF test's p-value is smaller than 1%.
     while ADF(copy_series.tolist())[1] > 0.01:
         logger.info("time " + str(counts) + " ADF test: " + str(ADF(copy_series.tolist())))
@@ -235,6 +242,7 @@ def decompose(time_series, season_period, if_plot):
     if if_plot:
         plt.figure(figsize=(12, 7))
         plt.subplot(411)
+        plt.title("seasonal decomposition")
         plt.plot(time_series, label='Original')
         plt.legend(loc='best')
         plt.subplot(412)
@@ -310,8 +318,8 @@ def add_args():
     parser.add_argument('--month', type=int, default=3,
                         help='The data ranges from several months ago to now. Default 4. Suggest that not too long period to avoid outliers in data.')
 
-    parser.add_argument('--period', type=int, default=5,
-                        help='The seasonal period. Default 5.')
+    parser.add_argument('--period', type=int, default=7,
+                        help='The seasonal period. Default 7.')
 
     parser.add_argument('--split_ratio', type=float, default=0.7,
                         help='Data splitting ratio. Default 0.7.')
@@ -339,6 +347,9 @@ def add_args():
     
     parser.add_argument("-l", "--log", action="store_true", dest="log", 
                         help= "Enable log transformation. Default false.")
+
+    parser.add_argument("-d", "--diff", action="store_false", dest="diff", 
+                        help= "Disable difference. Default True.")                    
 
     # set if using debug mod
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", 
@@ -425,15 +436,15 @@ def main():
     logger.info("-------------decomposition-------------")
     # check if period is legal.
     if args.period < 2:
-        logger.warning("Seasonal period is illegal. Turn to use default 5.")
-        args.period = 5
+        logger.warning("Seasonal period is illegal. Turn to use default 7.")
+        args.period = 7
     trend, seasonal, residual = decompose(train, args.period, args.plot)
 
     # difference
     logger.debug("-----------------Diff-----------------")
-    trend_diff, trend_diff_counts = diff(trend, args.plot, "trend")
+    trend_diff, trend_diff_counts = diff(trend, args.plot, "trend", args.diff)
     logger.debug("trend diff counts: " + str(trend_diff_counts))
-    residual_diff, residual_diff_counts = diff(residual, args.plot, "residual")
+    residual_diff, residual_diff_counts = diff(residual, args.plot, "residual", args.diff)
     logger.debug("residual diff counts: " + str(residual_diff_counts))
     
     # ARIMA model
@@ -448,10 +459,18 @@ def main():
                                                           residual_model_order[1]])))
 
     # model summary
-    logger.debug("---------trend model summary----------")
-    logger.debug(trend_model_fit.summary())
-    logger.debug("---------resid model summary----------")
-    logger.debug(residual_model_fit.summary())
+    try:
+        logger.debug("---------trend model summary----------")
+        logger.debug(trend_model_fit.summary())
+    except:
+        logger.warning("Error occurs in summary, simply skip")
+        pass    
+    try:
+        logger.debug("---------resid model summary----------")
+        logger.debug(residual_model_fit.summary())
+    except:
+        logger.warning("Error occurs in summary, simply skip")
+        pass
 
     if args.plot:
         # residual plots of trend model
@@ -493,9 +512,9 @@ def main():
     # plot train and fitted values in one graph.
     if args.plot:
         plt.figure()
-        plt.plot(fit_seq, color='red', label='fit')
-        plt.plot(np.array(train), color ='blue', label='train')
-        plt.legend(loc='best')
+        plt.plot(fit_seq, color = 'red', label = 'fit')
+        plt.plot(np.array(train), color = 'blue', label = 'train')
+        plt.legend(loc = 'best')
         plt.savefig('fit_vs_train.png')
         plt.close()
 
@@ -520,6 +539,68 @@ def main():
             plt.plot(np.array(test), color = "blue", label = "test")
             plt.legend(loc="best")
             plt.savefig("pred_vs_test.png")
+            plt.close()
+
+    # plot several models performance comparison on train set.
+    if args.plot:
+        logger.info("-----------Model Comparison------------")
+        plt.figure()
+        # actual value 
+        plt.plot(np.array(train), color = 'blue',
+                 label = "actual")
+        # auto-ARIMA with seasonal decompostion
+        plt.plot(fit_seq[1:], color = 'green',
+                 label = 'ARIMA with seasonal decomposition')
+        # simple auto-ARIMA
+        auto_arima_model_fit, _ = ARIMA_model(train, args, "auto_arima")
+        plt.plot(np.array(auto_arima_model_fit.fittedvalues), color = 'yellow' , 
+                label = 'Auto ARIMA')
+        # auto-ARIMA with log transfromation.
+        auto_log_arima_fit, _ = ARIMA_model(train.apply(np.log), args, "auto_arima")
+        plt.plot(np.array(auto_log_arima_fit.fittedvalues.apply(np.exp)), color = 'brown' , label = 'Auto ARIMA with log')
+        # rolling mean
+        plt.plot(np.array(train.rolling(int(.05 * len(train))).mean()), '--', 
+                 label = "Rolling mean")
+        # ordinary arima
+        plt.plot(np.array(ARIMA(train, (1, 0, 1)).fit(disp = 0).fittedvalues), color = "coral",
+                 label = "Ordinary ARIMA")
+        plt.legend(loc = "best")
+        plt.xlabel("days from " + str(train.index.tolist()[0]).replace(" 00:00:00", ""))
+        plt.ylabel("stock prices")
+        plt.title("Actual Stock Price Compared with Forecasted Stock Price")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig("model_comparison.png")
+        plt.close()
+
+        if list(test):
+            # calculate testing loss
+            loss_dict = dict()
+            # auto-ARIMA with seasonal decompostion
+            loss_dict["auto sarima"] = testing_loss
+            # simple auto-ARIMA
+            loss_dict["auto arima"] = loss(np.array(auto_arima_model_fit.predict(start = str(test.index.tolist()[0]),
+                                                                                 end = str(test.index.tolist()[-1]),
+                                                                                 dynamic = True)),
+                                           np.array(test), args.loss)
+            # auto-ARIMA with log transfromation.
+            loss_dict["auto arima log"] = loss(np.array(auto_log_arima_fit.predict(start = str(test.index.tolist()[0]),
+                                                                                   end = str(test.index.tolist()[-1]),
+                                                                                   dynamic = True).apply(np.exp)),
+                                               np.array(test), args.loss)
+            # ordinary arima
+            loss_dict["arima"] = loss(np.array(ARIMA(train, (1, 0, 1)).fit(disp = 0).predict(start = str(test.index.tolist()[0]),
+                                                                                                 end = str(test.index.tolist()[-1]),
+                                                                                                 dynamic = True)),
+                                               np.array(test), args.loss)
+            logger.info(loss_dict)
+            plt.figure(figsize=(12,6))
+            loss_df = pd.DataFrame.from_dict(loss_dict, orient='index')
+            plt.bar(loss_df.index.tolist(), loss_df.iloc[:, 0])
+            plt.ylabel("RMSE")
+            plt.legend('')
+            plt.title("RMSE for Difference Models on Test Data")
+            plt.savefig("RMSE_model_comparison.png")
             plt.close()
 
     # prediction
