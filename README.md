@@ -25,6 +25,37 @@ This project is used to help our VE406 Project team work together.
 
 Once we open source the code for `20FA VE406 Project` and if you want to refer to our work, please follow the Joint Institute’s honor code and don’t plagiarize these codes directly.
 
+### Dependency Requirements
+
+1. All platforms supported, `windows`, `MacOC`, `linux`. 
+2. `python>=3.7` should be installed. 
+3. To install the dependent `python` packages, please run the following commands:
+   
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+### Project Usage
+
+1. `ARIMA-GARCH.py`: main project file of final model, Seasonal-ARIMA-GARCH.
+2. `pure-ARIMA.py`: main project file of Benchmark model, Seasonal-ARIMA.
+   
+For **TA** grading, please run the following command:
+
+```
+python3 ARIMA-GARCH.py --
+```
+After tuning, above choice of some hyperparameters give the optimized results.
+
+For more usage, please run the commmand:
+
+```bash
+python3 XXX.py --help
+```
+
+The detailed instruction will be provided in std output.
+
 ### Code Style
 
 **Example**:
