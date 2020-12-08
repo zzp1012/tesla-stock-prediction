@@ -43,9 +43,9 @@ logger = logging.getLogger("GARCH")
 
 def plot_pvalue(pvalue, name):
     """
-    pvalue:
+    pvalue: list of pvalue
     name: used for later label and title.
-    effect:
+    effect: plot pvalue and a straight line which is equal to 0.05
     """
     plt.figure()
     plt.plot(pvalue)
@@ -57,9 +57,9 @@ def plot_pvalue(pvalue, name):
 
 def plot_residual(resid, name):
     """
-    resid:
+    resid: the residuals
     name: used for later label and title.
-    effect:
+    effect: plot the residual plot.
     """
     resid.plot()
     plt.title(name + " Residual Plot")
@@ -72,6 +72,11 @@ def plot_residual(resid, name):
 
 def plot_pred_vs_truth(y_pred, y_truth, label1, label2):
     """
+    y_pred: the predicted values of dependent variable.
+    y_truth: the ground truth values of dependent variable.
+    label1: the label1 is the lable for y_pred.
+    label2: the label2 is the label for y_truth.
+    effect: plot predicted values v.s. the ground truth values.
     """
     plt.figure()
     plt.plot(y_pred, color='red', label=label1)
@@ -84,9 +89,9 @@ def plot_pred_vs_truth(y_pred, y_truth, label1, label2):
 
 def plot_description(time_series, name):
     """
-    time_series: 
+    time_series: the time series which will be plotted
     name: used for later label and title.
-    effect:
+    effect: return the plot containing original time series and rolling mean and rolling std.
     """
     fig = plt.gcf()
     fig.set_size_inches(18.5, 10.5)
@@ -96,8 +101,6 @@ def plot_description(time_series, name):
     plt.plot(time_series.rolling(int(.05 * len(time_series))).std(), ":",
                 label = "Rolling Std")
     plt.title("Overview Description Plot of " + name.replace("_", " "))
-    if name == "tsla_close":
-        plt.ylabel("stock price")
     plt.xlabel("days")
     plt.legend(loc = "best")
     plt.savefig(name + "_description.png")
@@ -106,11 +109,11 @@ def plot_description(time_series, name):
 
 def plot_decomposition(time_series, trend, seasonal, residual):
     """
-    time_series: 
-    trend:
-    seasonal:
-    residual:
-    effect:
+    time_series: the original series.
+    trend: the trend decomposed from the original series.
+    seasonal: the seasonal decomposed from the original series.
+    residual: the residual decomposed from the original series.
+    effect: the plot comparing different time series.
     """
     plt.figure(figsize=(12, 7))
     plt.subplot(411)
@@ -132,11 +135,11 @@ def plot_decomposition(time_series, trend, seasonal, residual):
 
 def plot_diff(time_series, copy_series, counts, name):
     """
-    time_series: 
-    copy_series:
-    counts:
+    time_series: the original series.
+    copy_series: the series after diff.
+    counts: the number of counts of difference.
     name: used for later label and title.
-    effect:
+    effect: save the plot of diff v.s. original
     """
     plt.figure(figsize=(10, 5))
     plt.plot(time_series, label='Original', color='blue')
@@ -367,21 +370,6 @@ def mix_model(time_series_diff, args, name):
     name: the name of time_series_diff.
     return fitted ARIMA model, parameters for ARIMA model, fitted GARCH model and parameters for GARCH model.
     """
-    # check if args.ic is illegal.
-    if args.ic not in ["bic", "aic"]:
-        logger.warning("The information criteria is illegal. Turn to default ic: BIC")
-        args.ic = "bic"
-
-    # check the value of convergence tol.
-    if args.tol > 0.01:
-        logger.warning("The convergence tolerance is too large. Turn to use default value: 1e-8")
-        args.tol = 1e-8
-    
-    # check the likelihood function used.
-    if args.method not in ["css-mle", "mle", "css"]:
-        logger.warning("The likelihood function is illegal. Turn to default choice: css-mle")
-        args.method = "css-mle"
-
     # get arima model
     arima_model_fit, arima_order = ARIMA_model(time_series_diff, args, name)
 
@@ -395,7 +383,7 @@ def mix_model(time_series_diff, args, name):
                                model_df=sum(arima_order),
                                return_df=False
                                )
-    logger.info("acorr_ljungbox: " + str(list(pvalue)))
+    logger.debug("acorr_ljungbox: " + str(list(pvalue)))
     if args.plot:
         plot_pvalue(pvalue, "acorr_ljungbox")
     if np.sum(pvalue < 0.05) > 0:
@@ -495,17 +483,17 @@ def app_entropy(U, m = 2, r = 3) -> float:
     return abs(_phi(m + 1) - _phi(m))
 
 
-def data_loader(tickers, month):
+def data_loader(ticker, month):
     """
-    tickers: list of tuples, containing info of ticker and data sources.
+    ticker: tuple, containing info of ticker and data sources.
     return the dataframes according to tickers from corresponding sources.
     """
     # get the start date and end date
     start_date = datetime.date.today() + relativedelta(months = -month)
     end_date = datetime.date.today()
     # fetching data frames
-    stock_dfs = list()
-    for ticker, source in tickers:
+    ticker, source = ticker
+    try:
         if source == "fred":
             df = pd.DataFrame(wb.DataReader(ticker, 
                                             data_source = source, 
@@ -516,25 +504,35 @@ def data_loader(tickers, month):
                                             data_source = source, 
                                             start = start_date, 
                                             end = end_date))
-        stock_dfs.append(df)
-    return stock_dfs
+    except:
+        logger.error("The data can not be obtained from yahoo, plz try other ticker")
+        exit(0)
+    
+    return df
 
 
 def add_args():
     """
     return a parser added with args required by fit
     """
-    parser = argparse.ArgumentParser(description="TSLA-ARIMA-GARCH")
+    parser = argparse.ArgumentParser(description="ARIMA-GARCH")
+
+    # basic setting
+    parser.add_argument('--days', type=int, default=5,
+                        help='Number of days you want to predicted starting from tomorrow. Default 5.')
+
+    parser.add_argument('--ticker', type=str, default="TSLA",
+                        help='The company ticker you want to predict. Default TSLA.')
 
     # hyperparameters setting
-    parser.add_argument('--month', type=int, default=4,
+    parser.add_argument('--month', type=int, default=3,
                         help='The data ranges from several months ago to now. Default 4. Suggest that not too long period to avoid outliers in data.')
 
-    parser.add_argument('--period', type=int, default=7,
-                        help='The seasonal period. Default 7.')
+    parser.add_argument('--period', type=int, default=3,
+                        help='The seasonal period. Default 3.')
 
-    parser.add_argument('--split_ratio', type=float, default=0.7,
-                        help='Data splitting ratio. Default 0.7.')
+    parser.add_argument('--split_ratio', type=float, default=1,
+                        help='Data splitting ratio. Default 1.')
 
     parser.add_argument('--max_ar', type=int, default=4,
                         help='Maximum number of AR lags to use. Default 4.')
@@ -556,9 +554,6 @@ def add_args():
 
     parser.add_argument('--seed', type=int, default=0,
                         help='Random seed. Default 0.')
-    
-    parser.add_argument("-l", "--log", action="store_true", dest="log", 
-                        help= "Enable log transformation. Default false.")
 
     parser.add_argument('--max_p', type=int, default=4,
                         help='Maximum lag order of the symmetric innovation. Default 4.')
@@ -566,8 +561,11 @@ def add_args():
     parser.add_argument('--max_q', type=int, default=4,
                         help='Maximum lag order of lagged volatility or equivalent. Default 4.')
 
-    parser.add_argument("-d", "--diff", action="store_false", dest="diff", 
-                        help= "Disable difference. Default True.")                    
+    parser.add_argument("-d", "--diff", action="store_true", dest="diff", 
+                        help= "Enable difference. Default false.")  
+
+    parser.add_argument("-l", "--log", action="store_true", dest="log", 
+                        help= "Enable log transformation. Default false.")                  
 
     # set if using debug mod
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", 
@@ -578,6 +576,37 @@ def add_args():
                         help= "Enable plots. Default false.")
 
     args = parser.parse_args()
+
+     # check if data range is legal.
+    if  args.month <= 0 or args.month > 24:
+        logger.warning("The data range is illegal. Turn to use default 3")
+        args.month = 3
+
+    # check if period is legal.
+    if args.period < 1:
+        logger.warning("Seasonal period is illegal. Turn to use default 3.")
+        args.period = 3
+
+    # check if args.ic is illegal.
+    if args.ic not in ["bic", "aic"]:
+        logger.warning("The information criteria is illegal. Turn to default ic: BIC")
+        args.ic = "bic"
+
+    # check the value of convergence tol.
+    if args.tol > 0.01:
+        logger.warning("The convergence tolerance is too large. Turn to use default value: 1e-8")
+        args.tol = 1e-8
+    
+    # check the likelihood function used.
+    if args.method not in ["css-mle", "mle", "css"]:
+        logger.warning("The likelihood function is illegal. Turn to default choice: css-mle")
+        args.method = "css-mle"
+
+    # check the days
+    if args.days <= 0 or args.days > 20:
+        logger.warning("The days for prediction is smaller 0 or larger than 20. Turn to default 5.")
+        args.days = 5
+    
     return args
 
 
@@ -600,56 +629,45 @@ def main():
 
     # data fetching
     logger.info("-------------Data fetching-------------")
-    tickers = \
-    [
-        ("TSLA", "yahoo"), # 0, TESLA Stock
-    ]
-    # check if data range is legal.
-    if  args.month <= 0 or args.month > 24:
-        logger.warning("The data range is illegal. Turn to use default 4")
-        args.month = 4
-    tsla_df = data_loader(tickers, args.month)[0] # get dataframes from "yahoo" finance.
-    tsla_close = tsla_df["Close"].resample('D').ffill() # fullfill the time series.
+    tickers = (args.ticker, "yahoo")
+    df = data_loader(tickers, args.month) # get dataframes from "yahoo" finance.
+    close = df["Close"].resample('D').ffill() # fullfill the time series.
 
     # data cleaning
     logger.info("-------------Data cleaning-------------")
-    if np.sum(tsla_close.isnull()) > 0:
+    if np.sum(close.isnull()) > 0:
         logger.debug("The time series contain missing values & we use interpolation to resolve this issue")
-        tsla_close = tsla_close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
+        close = close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
     # Then, if there is still some missing values, we simply drop this value.abs
-    tsla_close = tsla_close.dropna()
-    logger.debug(tsla_close)
+    close = close.dropna()
+    logger.debug(close)
 
     # data analyzing.
-    logger.info("ADF test for tsla Close: " + str(ADF(tsla_close.tolist())[1]))
-    # plot the graph describe tsla close
+    logger.info("ADF test for " + tickers[0][0] + " Close: " + str(ADF(close.tolist())[1]))
+    # plot the graph describe close
     if args.plot:
-        plot_description(tsla_close, "tesla_close")
+        plot_description(close, tickers[0][0] + "_close")
 
     # if log transformation
     if args.log:
-        tsla_close = tsla_close.apply(np.log) # log transformation
+        close = close.apply(np.log) # log transformation
 
     # estimate the forecastability of a time series:
     #   Approximate entropy is a technique used to quantify the amount of regularity and the unpredictability of fluctuations over time-series data. 
     #   Smaller values indicates that the data is more regular and predictable.
-    logger.info("The approximate entropy: " + str(app_entropy(U = np.array(tsla_close), r = 0.2*np.std(np.array(tsla_close)))))
+    logger.info("The approximate entropy: " + str(app_entropy(U = np.array(close), r = 0.2*np.std(np.array(close)))))
 
     # data splitting
     logger.info("-------------Data splitting------------")
     # check if split_ratio legal.
-    if args.split_ratio > 1 or round(len(tsla_close) * args.split_ratio) <= 0:
+    if args.split_ratio > 1 or round(len(close) * args.split_ratio) <= 0:
         logger.warning("Splitting ratio is illegal. Turn to use default 0.7")
         args.split_ratio = 0.7
-    train = tsla_close[0:round(len(tsla_close) * args.split_ratio)]
-    test = tsla_close[round(len(tsla_close) * args.split_ratio):]
+    train = close[0:round(len(close) * args.split_ratio)]
+    test = close[round(len(close) * args.split_ratio):]
 
     # time serise decomposition
     logger.info("-------------decomposition-------------")
-    # check if period is legal.
-    if args.period < 2:
-        logger.warning("Seasonal period is illegal. Turn to use default 7.")
-        args.period = 7
     trend, seasonal, residual = decompose(train, args.period, args.plot)
 
     # EDA of decomposed data, trend and residual
@@ -733,23 +751,17 @@ def main():
 
     # prediction
     logger.info("--------------prediction---------------")
+    start_date = datetime.date.today() + relativedelta(days = 1)
+    end_date = datetime.date.today() + relativedelta(days = args.days)
     prediction = model_predict(trend_arima_fit, residual_arima_fit,
                                trend_garch_order, residual_garch_order,
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
-                               True, "2020-12-07 00:00:00", "2020-12-11 00:00:00", args.period)
+                               True, str(start_date) + " 00:00:00", str(end_date) + " 00:00:00", args.period)
     if args.log:
         prediction = np.exp(prediction)
-    logger.info("2020-12-07 predicted value: " + str(prediction[0]))
-    logger.info("2020-12-08 predicted value: " + str(prediction[1]))
-    logger.info("2020-12-09 predicted value: " + str(prediction[2]))
-    logger.info("2020-12-10 predicted value: " + str(prediction[3]))
-    logger.info("2020-12-11 predicted value: " + str(prediction[4]))
-
-    logger.info("--------------File write---------------")
-    with open("group_7.txt", "w+") as f:
-        for pred in list(prediction):
-            f.write("{:.3f}\n".format(pred))
+    for i in range(args.days):
+        logger.info(str(start_date + relativedelta(days = i)) + " predicted value: " + str(prediction[i]))
     logger.info("--------------Process ends-------------")
 
 if __name__ == "__main__":
