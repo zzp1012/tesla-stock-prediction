@@ -44,7 +44,7 @@ Once we open source the code for `20FA VE406 Project` and if you want to refer t
 For **TA** grading, please run the following command:
 
 ```
-python3 ARIMA-GARCH.py --period 3 --split_ratio 1 --month 3 -d
+python3 ARIMA-GARCH.py --period 2 --split_ratio 1 --month 2
 ```
 After tuning, above choice of some hyperparameters give the optimized results.
 

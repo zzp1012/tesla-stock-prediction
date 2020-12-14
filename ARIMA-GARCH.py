@@ -631,7 +631,7 @@ def main():
     logger.info("-------------Data fetching-------------")
     tickers = (args.ticker, "yahoo")
     df = data_loader(tickers, args.month) # get dataframes from "yahoo" finance.
-    close = df["Close"].resample('D').ffill() # fullfill the time series.
+    close = df["Close"].resample('D').bfill() # fullfill the time series.
 
     # data cleaning
     logger.info("-------------Data cleaning-------------")
@@ -758,6 +758,7 @@ def main():
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
                                True, str(start_date) + " 00:00:00", str(end_date) + " 00:00:00", args.period)
+    logger.debug(prediction)
     if args.log:
         prediction = np.exp(prediction)
     for i in range(args.days):
