@@ -491,8 +491,12 @@ def data_loader(ticker, month, end):
     return the dataframes according to ticker from corresponding sources.
     """
     # get the start date and end date
-    start_date = datetime.date.today() + relativedelta(months = -month, days = end - 1)
-    end_date = datetime.date.today() + relativedelta(days = end)
+    if end > 0:
+        start_date = datetime.date.today() + relativedelta(months = -month)
+        end_date = datetime.date.today()
+    else:    
+        start_date = datetime.date.today() + relativedelta(months = -month, days = end - 1)
+        end_date = datetime.date.today() + relativedelta(days = end)
     # fetching data frames
     try:
         close = pd.DataFrame(wb.DataReader(ticker, 
