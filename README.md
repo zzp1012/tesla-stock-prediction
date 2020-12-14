@@ -28,7 +28,7 @@ Once we open source the code for `20FA VE406 Project` and if you want to refer t
 ### Dependency Requirements
 
 1. All platforms supported, `windows`, `MacOC`, `linux`. 
-2. `python>=3.7` should be installed. 
+2. `Anaconda` should be installed. 
 3. To install the dependent `python` packages, please run the following commands:
    
    ```bash
