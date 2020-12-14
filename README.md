@@ -32,8 +32,10 @@ Once we open source the code for `20FA VE406 Project` and if you want to refer t
 3. To install the dependent `python` packages, please run the following commands:
    
    ```bash
+   conda create -n tesla python==3.7
    pip install --upgrade pip
    pip install -r requirements.txt
+   conda activate tesla
    ```
 
 ### Project Usage
