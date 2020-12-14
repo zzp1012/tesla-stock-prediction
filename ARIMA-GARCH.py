@@ -483,27 +483,22 @@ def app_entropy(U, m = 2, r = 3) -> float:
     return abs(_phi(m + 1) - _phi(m))
 
 
-def data_loader(ticker, month):
+def data_loader(ticker, month, end):
     """
     ticker: tuple, containing info of ticker and data sources.
-    return the dataframes according to tickers from corresponding sources.
+    month: the range of data.
+    end: the end date of the range.
+    return the dataframes according to ticker from corresponding sources.
     """
     # get the start date and end date
-    start_date = datetime.date.today() + relativedelta(months = -month)
-    end_date = datetime.date.today()
+    start_date = datetime.date.today() + relativedelta(months = -month, days = end)
+    end_date = datetime.date.today() + relativedelta(days = end)
     # fetching data frames
-    ticker, source = ticker
     try:
-        if source == "fred":
-            df = pd.DataFrame(wb.DataReader(ticker, 
-                                            data_source = source, 
-                                            start = start_date + relativedelta(days = -1), 
-                                            end = end_date))
-        elif source == "yahoo":
-            df = pd.DataFrame(wb.DataReader(ticker, 
-                                            data_source = source, 
-                                            start = start_date, 
-                                            end = end_date))
+        df = pd.DataFrame(wb.DataReader(ticker, 
+                                        data_source = "yahoo", 
+                                        start = start_date, 
+                                        end = end_date))
     except:
         logger.error("The data can not be obtained from yahoo, plz try other ticker")
         exit(0)
@@ -518,6 +513,9 @@ def add_args():
     parser = argparse.ArgumentParser(description="ARIMA-GARCH")
 
     # basic setting
+    parser.add_argument('--start', type=int, default=-7,
+                        help='The start date of you want to predict. Default today - 7.')
+
     parser.add_argument('--days', type=int, default=5,
                         help='Number of days you want to predicted starting from tomorrow. Default 5.')
 
@@ -629,8 +627,7 @@ def main():
 
     # data fetching
     logger.info("-------------Data fetching-------------")
-    tickers = (args.ticker, "yahoo")
-    df = data_loader(tickers, args.month) # get dataframes from "yahoo" finance.
+    df = data_loader(args.ticker, args.month, args.start) # get dataframes from "yahoo" finance.
     close = df["Close"].resample('D').bfill() # fullfill the time series.
 
     # data cleaning
@@ -640,13 +637,14 @@ def main():
         close = close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
     # Then, if there is still some missing values, we simply drop this value.abs
     close = close.dropna()
+    close = close[0:-1]
     logger.debug(close)
 
     # data analyzing.
-    logger.info("ADF test for " + tickers[0][0] + " Close: " + str(ADF(close.tolist())[1]))
+    logger.info("ADF test for " + args.ticker + " Close: " + str(ADF(close.tolist())[1]))
     # plot the graph describe close
     if args.plot:
-        plot_description(close, tickers[0][0] + "_close")
+        plot_description(close, args.ticker + "_close")
 
     # if log transformation
     if args.log:
@@ -751,13 +749,24 @@ def main():
 
     # prediction
     logger.info("--------------prediction---------------")
-    start_date = datetime.date.today() + relativedelta(days = 1)
-    end_date = datetime.date.today() + relativedelta(days = args.days)
+    start_date = datetime.date.today() + relativedelta(days = args.start)
+    end_date = datetime.date.today() + relativedelta(days = args.days + args.start - 1)
+    
     prediction = model_predict(trend_arima_fit, residual_arima_fit,
                                trend_garch_order, residual_garch_order,
                                trend, residual, seasonal, 
                                trend_diff_counts, residual_diff_counts, 
                                True, str(start_date) + " 00:00:00", str(end_date) + " 00:00:00", args.period)
+
+    if args.days + args.start < 0:
+        truth = pd.DataFrame(wb.DataReader(args.ticker, 
+                                           data_source = "yahoo", 
+                                           start = start_date + relativedelta(days = -1), 
+                                           end = end_date))
+        truth = truth["Close"].values
+        logger.debug(truth)
+        logger.info("Prediction Error: " + str(loss(prediction, truth, args.loss)))
+    
     logger.debug(prediction)
     if args.log:
         prediction = np.exp(prediction)
