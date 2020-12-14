@@ -231,7 +231,7 @@ def model_predict(trend_arima_fit, residual_arima_fit,
                                               update_freq = 0,
                                               show_warning = False)
             trend_pred_variance[i] = np.sqrt(trend_model_fit.forecast(horizon = 1).variance.values[-1,:][0]) + trend_model_fit.forecast(horizon = 1).mean.values[-1,:][0]
-            current_trend_resid.append(pd.DataFrame.from_dict({current_trend_resid.index.tolist()[-1] + relativedelta(days= 1): trend_pred_variance[i]}, orient = "index"))
+            current_trend_resid = current_trend_resid.append(pd.DataFrame.from_dict({current_trend_resid.index.tolist()[-1] + relativedelta(days= 1): trend_pred_variance[i]}, orient = "index"))
 
             residual_model = arch_model(current_residual_resid,
                                         mean = "Constant",
@@ -242,7 +242,7 @@ def model_predict(trend_arima_fit, residual_arima_fit,
                                                     update_freq = 0,
                                                     show_warning = False)
             residual_pred_variance[i] = np.sqrt(residual_model_fit.forecast(horizon = 1).variance.values[-1,:][0]) + residual_model_fit.forecast(horizon = 1).mean.values[-1,:][0]
-            current_residual_resid.append(pd.DataFrame.from_dict({current_residual_resid.index.tolist()[-1] + relativedelta(days= 1): residual_pred_variance[i]}, orient = "index"))
+            current_residual_resid = current_residual_resid.append(pd.DataFrame.from_dict({current_residual_resid.index.tolist()[-1] + relativedelta(days= 1): residual_pred_variance[i]}, orient = "index"))
 
         trend_pred_seq = trend_pred_seq + trend_pred_variance 
         residual_pred_seq = residual_pred_seq + residual_pred_variance
@@ -491,19 +491,31 @@ def data_loader(ticker, month, end):
     return the dataframes according to ticker from corresponding sources.
     """
     # get the start date and end date
-    start_date = datetime.date.today() + relativedelta(months = -month, days = end)
+    start_date = datetime.date.today() + relativedelta(months = -month, days = end - 1)
     end_date = datetime.date.today() + relativedelta(days = end)
     # fetching data frames
     try:
-        df = pd.DataFrame(wb.DataReader(ticker, 
+        close = pd.DataFrame(wb.DataReader(ticker, 
                                         data_source = "yahoo", 
                                         start = start_date, 
-                                        end = end_date))
+                                        end = end_date))["Close"]
+        
     except:
         logger.error("The data can not be obtained from yahoo, plz try other ticker")
         exit(0)
+
+    if close.index.tolist()[-1] != end_date:
+        close = close.append(pd.DataFrame.from_dict({pd.Timestamp(str(end_date)):close.iloc[-1]}, orient = "index"))
     
-    return df
+    close = close.resample('D').bfill().iloc[0:-1] # fullfill the time series.
+     # data cleaning
+    if np.sum(close.isnull()) > 0:
+        logger.debug("The time series contain missing values & we use interpolation to resolve this issue")
+        close = close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
+    # Then, if there is still some missing values, we simply drop this value.abs
+    close = close.dropna()
+    
+    return close
 
 
 def add_args():
@@ -616,6 +628,10 @@ def main():
     logger.setLevel(logging.DEBUG)
     if not args.verbose:
         logger.setLevel(logging.INFO)
+
+    if args.days + args.start < 1:
+        logger.info("--------TEST enviroment start---------")
+
     logger.debug("--------DEBUG enviroment start---------")
     
     # show the hyperparameters
@@ -627,19 +643,9 @@ def main():
 
     # data fetching
     logger.info("-------------Data fetching-------------")
-    df = data_loader(args.ticker, args.month, args.start) # get dataframes from "yahoo" finance.
-    close = df["Close"].resample('D').bfill() # fullfill the time series.
-
-    # data cleaning
-    logger.info("-------------Data cleaning-------------")
-    if np.sum(close.isnull()) > 0:
-        logger.debug("The time series contain missing values & we use interpolation to resolve this issue")
-        close = close.interpolate(method='polynomial', order=2, limit_direction='forward', axis=0)
-    # Then, if there is still some missing values, we simply drop this value.abs
-    close = close.dropna()
-    close = close[0:-1]
+    close = data_loader(args.ticker, args.month, args.start) # get dataframes from "yahoo" finance.
     logger.debug(close)
-
+    
     # data analyzing.
     logger.info("ADF test for " + args.ticker + " Close: " + str(ADF(close.tolist())[1]))
     # plot the graph describe close
@@ -758,14 +764,20 @@ def main():
                                trend_diff_counts, residual_diff_counts, 
                                True, str(start_date) + " 00:00:00", str(end_date) + " 00:00:00", args.period)
 
-    if args.days + args.start < 0:
+    # if the current predictions days are in the histortical data range, then we can calculate the prediction error very easily.
+    if args.days + args.start < 1:
         truth = pd.DataFrame(wb.DataReader(args.ticker, 
                                            data_source = "yahoo", 
-                                           start = start_date + relativedelta(days = -1), 
-                                           end = end_date))
-        truth = truth["Close"].values
-        logger.debug(truth)
-        logger.info("Prediction Error: " + str(loss(prediction, truth, args.loss)))
+                                           start = start_date + relativedelta(days = 1), 
+                                           end = end_date))["Close"]
+        # transform the original truth_df to the correct range of dates.
+        if truth.index.tolist()[0] != start_date:
+            truth = truth.append(pd.DataFrame.from_dict({pd.Timestamp(str(start_date)):truth.iloc[0]}, orient = "index"))
+        if truth.index.tolist()[-1] != end_date:
+            truth = truth.append(pd.DataFrame.from_dict({pd.Timestamp(str(end_date)):truth.iloc[-1]}, orient = "index"))
+        truth = truth.sort_index()
+        truth = truth.resample('D').bfill().values
+        logger.info("Prediction Error: " + str(loss(prediction, np.array(truth).ravel(), args.loss)))
     
     logger.debug(prediction)
     if args.log:
