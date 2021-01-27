@@ -3,27 +3,20 @@
 </div>
 <center>
 	<h2>
-		VE406 Applied Regression Analysis using R
-	</h2>
-</center> 
-<center>
-	<h3>
 		Tesla Stock Prediction
-	</h3>
+	</h2>
 </center>
 <center>
    <h4>
        FA 2020
-    </h4> 
+    </h4>
 </center>
 
 ------------------------------------------
 
 ### Abstract
 
-This project is used to help our VE406 Project team work together. 
-
-Once we open source the code for `20FA VE406 Project` and if you want to refer to our work, please follow the Joint Institute’s honor code and don’t plagiarize these codes directly.
+Explore TESLA stock price (time-series) using ARIMA & GARCH model.
 
 ### Dependency Requirements
 
@@ -120,10 +113,6 @@ git push origin zzp1012 # create branch 'zzp1012' remotely on github and copy yo
 git pull origin master # synchronize files on remote master branch.
 git pull origin "you branch name" # the 'master' can be replaced by the name of the other branch created on remote project on github, then you can synchronize files on the specific remote branch.
 ```
-
-### Reference
-
-[1] Zhu, T., 2020. *Ve406 Applied Regression Analysis using R Project*.
 
 ---------------------------------------------------------------
 
